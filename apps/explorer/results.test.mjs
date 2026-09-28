@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SORTS, filterRows, sortRows, viewOf, indexOfId, clampIndex, filterKeyOf }
+import { SORTS, filterRows, sortRows, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered }
   from "./results.js";
 
 const day = (d) => Date.parse(`${d}T12:00:00Z`);
@@ -60,4 +60,28 @@ test("filterKeyOf changes when any input changes", () => {
   assert.notEqual(a, filterKeyOf(all, "date", search));
   assert.notEqual(a, filterKeyOf(all, "cloud", { ...search, at: 2 }));
   assert.equal(typeof filterKeyOf(all, "cloud", null), "string");
+});
+
+test("whyFiltered names each failing gate and the value that admits the row", () => {
+  // Every row of the fixture passes the open filters.
+  for (const r of rows) assert.deepEqual(whyFiltered(r, all), []);
+  const f = { ...all, maxCloud: 30, minCoverage: 50,
+    t0: Date.parse("2024-02-01T00:00:00Z"), t1: Date.parse("2024-10-31T23:59:59.999Z") };
+  // S2A_1: before the window and too cloudy; its cover passes.
+  assert.deepEqual(whyFiltered(rows[0], f).map((w) => [w.gate, w.from ?? w.value]),
+    [["date", "2024-01-05"], ["cloud", 40]]);
+  // S2A_2: only its coverage fails, relaxed down to its own value.
+  assert.deepEqual(whyFiltered(rows[1], f).map((w) => [w.gate, w.value]), [["cover", 30]]);
+  // S2A_3: a null cover is never a reason, the same rule filterRows keeps.
+  assert.deepEqual(whyFiltered(rows[2], f), []);
+  // S2A_4: after the window and too cloudy.
+  assert.deepEqual(whyFiltered(rows[3], f).map((w) => [w.gate, w.to ?? w.value]),
+    [["date", "2024-11-20"], ["cloud", 80]]);
+  // A fractional cloud rounds up, so the relaxed slider admits the row.
+  const frac = { ...rows[0], cloud: 38.2, t: day("2024-06-01"), day: "2024-06-01" };
+  assert.equal(whyFiltered(frac, f)[0].value, 39);
+  // The reasons agree with filterRows: a row fails exactly when it has one.
+  for (const r of rows) {
+    assert.equal(whyFiltered(r, f).length === 0, filterRows([r], f).length === 1, r.id);
+  }
 });

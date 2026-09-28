@@ -10,6 +10,17 @@
 </head>
 <body>
 <div id="map"></div>
+<!-- Over the map while the shown scene fails the filters: why, and the ways
+     back. app.js fills and shows it with the scene box's amber state. -->
+<div id="filterbanner" hidden>
+  <div class="inner" role="status">
+    <span class="msg"><b>Outside your filters</b> <span id="fb-why"></span></span>
+    <button id="fb-include" class="mini" type="button">Include it</button>
+    <button id="fb-nearest" class="mini" type="button">Nearest match</button>
+    <button id="fb-clear" class="mini x" type="button"
+      aria-label="Clear this scene and show only the matching results">✕ Clear</button>
+  </div>
+</div>
 <!-- One container for everything that is not the map. On a desktop
      it is not a box at all: style.css gives #sheet and #sheetbody
      display: contents, so the image card and the sidebar keep the places
@@ -72,21 +83,51 @@
 <aside id="panel">
   <!-- The header names the loaded collection; app.js fills the select from
        its COLLECTIONS table, reads ?collection= and reloads on a change. -->
-  <h1 id="title">Sentinel-2 L2A</h1>
+  <div class="head">
+    <h1 id="title">Sentinel-2 L2A</h1>
+    <button id="about" class="mini" type="button" aria-label="About this page">About</button>
+  </div>
   <label class="switch">Collection <select id="collection"></select></label>
-  <p class="sub" id="sub">Sentinel-2 L2A scenes since 2016 — every query on this page
-     is a range read against static GeoParquet on Source Cooperative;
-     there is no API.</p>
-  <p id="status" class="status" role="status">Loading the map…</p>
+  <!-- One line under the title; the info button carries the rest. app.js
+       fills the line's text and the tip from the loaded collection. -->
+  <p class="sub"><span id="sub">Static GeoParquet, no API.</span>
+    <button type="button" class="info" id="sub-info" aria-label="How this page reads its data"
+      data-tip="Every query on this page is an HTTP range read against static GeoParquet on Source Cooperative. There is no API, no tile server and no database.">i</button></p>
+  <!-- What is picked: the tile and the scene on the map. The scene id links
+       to its static STAC item in the Portolan Browser. -->
+  <div id="selbox">
+    <p id="sel-hint" class="hint">Click a tile on the map to find its scenes.</p>
+    <div class="selrow" id="sel-tile-row" hidden><span class="lbl">Tile</span> <b id="sel-tile"></b></div>
+    <div class="selrow" id="sel-scene-row" hidden><span class="lbl">Scene</span>
+      <a id="sel-scene" target="_blank" rel="noopener"
+        title="Open the scene's static STAC item in the Portolan Browser"></a></div>
+    <!-- Shown when the scene on the map fails the current filters: why, and
+         the two ways back to a consistent view. -->
+    <div id="sel-filtered" hidden>
+      <p id="sel-why"></p>
+      <div class="selacts">
+        <button id="sel-include" class="mini" type="button"
+          title="Loosen only the filters this scene fails, just enough to admit it">Include it</button>
+        <button id="sel-nearest" class="mini" type="button"
+          title="Show the nearest scene that passes the filters">Nearest match</button>
+      </div>
+    </div>
+  </div>
+  <!-- Errors and warnings only: progress messages are not shown. -->
+  <p id="status" class="status" role="status" hidden></p>
   <section id="controls">
-    <label>Year <select id="year"></select></label>
-    <label>Color by
-      <select id="metric">
-        <option value="min_cloud_cover">clearest scene (min cloud %)</option>
-        <option value="scene_count">scene count</option>
-        <option value="median_cloud_cover">median cloud %</option>
-        <option value="max_cover">coverage (max % of tile filled)</option>
-      </select></label>
+    <div class="pair">
+      <label class="year">Year <select id="year"></select></label>
+      <label class="metric">Color by
+        <button type="button" class="info" aria-label="About the map colors"
+          data-tip="Clearest scene: the lowest cloud % of any scene in the window. Scene count: how many scenes imaged the tile. Median cloud: the median cloud % of those scenes. Coverage: the most of the tile any one scene fills.">?</button>
+        <select id="metric">
+          <option value="min_cloud_cover">Clearest scene</option>
+          <option value="scene_count">Scene count</option>
+          <option value="median_cloud_cover">Median cloud</option>
+          <option value="max_cover">Coverage</option>
+        </select></label>
+    </div>
     <div id="legend">
       <div class="ramp"></div>
       <div class="ticks"><span id="lo">clear</span><span id="hi">cloudy</span></div>
@@ -94,16 +135,12 @@
   </section>
   <section id="query">
     <h2>Find scenes</h2>
-    <p class="hint">Click the map to pick an MGRS tile.</p>
-    <div class="filter dates-head">
-      <label for="date0">Dates
-        <button type="button" class="info" aria-label="About the date window"
-          data-tip="Drag either handle; the calendars follow. The map recolors by whole months; the scene list follows to the day.">?</button>
-      </label>
-    </div>
     <div class="dates">
-      <label>From <input type="date" id="date0"></label>
-      <label>To <input type="date" id="date1"></label>
+      <input type="date" id="date0" aria-label="From">
+      <span class="dash">–</span>
+      <input type="date" id="date1" aria-label="To">
+      <button type="button" class="info" aria-label="About the date window"
+        data-tip="Drag either handle; the calendars follow. The map recolors by whole months; the scene list follows to the day.">?</button>
       <span id="datelock" class="chip" hidden><span id="datelock-label"></span>
         <button id="datereset" class="mini" type="button"
           aria-label="Back to the whole year">✕</button></span>
@@ -134,9 +171,9 @@
       <output id="minscenes-out">0</output>
     </div>
   </section>
-  <section id="timeline"><h2>Monthly scenes</h2><div id="bars"></div>
-    <p class="hint" id="timeline-scope">All tiles. Click a tile on the map, then a bar to search a month.</p></section>
-  <div id="sortrow"><label>Sort <select id="sort"></select></label></div>
+  <details id="timeline"><summary>Monthly scenes</summary><div id="bars"></div>
+    <p class="hint" id="timeline-scope">All tiles. Click a tile on the map, then a bar to search a month.</p></details>
+  <div id="sortrow"><span id="rescount"></span><label>Sort <select id="sort"></select></label></div>
   <section id="results"></section>
   <details id="apibox"><summary>The "API request" this answered</summary>
     <pre id="api"></pre><pre id="sql"></pre></details>
@@ -146,6 +183,38 @@
 </aside>
   </div>
 </div>
+<!-- The index ramps the result cards' NDVI and NDWI icons fill with
+     (app.js CARD_PRESETS), defined once for the whole page. The stops are
+     bands.js INDICES' ramps. -->
+<svg id="icon-defs" width="0" height="0" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="gi-ndvi"><stop offset="0" stop-color="#8c510a"/>
+      <stop offset=".5" stop-color="#f5f5f5"/><stop offset="1" stop-color="#01665e"/></linearGradient>
+    <linearGradient id="gi-ndwi"><stop offset="0" stop-color="#a6611a"/>
+      <stop offset=".5" stop-color="#f5f5f5"/><stop offset="1" stop-color="#0571b0"/></linearGradient>
+  </defs>
+</svg>
+<!-- The first-visit welcome. app.js opens it once per browser (a
+     localStorage flag) and again from the About button. -->
+<dialog id="welcome" aria-labelledby="welcome-title">
+  <h2 id="welcome-title">Sentinel-2 Explorer</h2>
+  <p>Find and view Sentinel-2 L2A scenes anywhere on Earth. Nothing on this
+     page calls an API. Every search is an HTTP range read against static
+     GeoParquet files on Source Cooperative. Every image is read from the
+     scene's Cloud-Optimized GeoTIFFs on AWS and drawn in your browser.</p>
+  <ol>
+    <li>The map colors each MGRS tile by its clearest scene in the year. Change
+        the year, or what the color shows, at the top of the panel.</li>
+    <li>Click a tile. Its scenes are listed in the panel and the clearest one
+        goes on the map.</li>
+    <li>Narrow the dates, the max cloud and the min coverage to filter the list.</li>
+    <li>Click a result card to show that scene. The icons on a card show it as
+        true color, NDVI, NDWI, false color or SWIR.</li>
+    <li>Step through the scenes with ‹ › and the scrub bar at the lower right.
+        Change the bands and the stretch there too.</li>
+  </ol>
+  <form method="dialog"><button id="welcome-go" type="submit">Start exploring</button></form>
+</dialog>
 <!-- The shared info/hover popover: one box for every info button
      and the image nav's prev/next caption, positioned by app.js next to
      whichever one is active. A direct child of body, not of #sheet or

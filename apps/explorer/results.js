@@ -20,6 +20,28 @@ export function filterRows(rows, f) {
     && (f.minCoverage <= 0 || r.cover === null || r.cover >= f.minCoverage));
 }
 
+// Why a row fails the filters, one entry per failing gate, in the order the
+// panel lists the controls: the date window, max cloud, min coverage. An
+// empty list means the row passes. Each entry carries the loosest value of
+// that gate that lets the row through, so a caller can relax the gate to
+// exactly there and no further: `from`/`to` for the window (the row's day),
+// the whole-number slider value for cloud (rounded up) and coverage
+// (rounded down). Mirrors filterRows gate for gate.
+export function whyFiltered(r, f) {
+  const out = [];
+  if (r.t < f.t0) out.push({ gate: "date", text: `${r.day} is before the date window`, from: r.day });
+  if (r.t > f.t1) out.push({ gate: "date", text: `${r.day} is after the date window`, to: r.day });
+  if (r.cloud > f.maxCloud) {
+    out.push({ gate: "cloud", text: `${r.cloud.toFixed(1)}% cloud, over the ${f.maxCloud}% max`,
+      value: Math.ceil(r.cloud) });
+  }
+  if (f.minCoverage > 0 && r.cover !== null && r.cover < f.minCoverage) {
+    out.push({ gate: "cover", text: `${r.cover.toFixed(1)}% coverage, under the ${f.minCoverage}% min`,
+      value: Math.floor(r.cover) });
+  }
+  return out;
+}
+
 // hasOwn, not `SORTS[key] ?? SORTS.cloud`: "__proto__", "constructor" and
 // "toString" all find something on the prototype chain, so the ?? never
 // fires and `.cmp` comes back undefined — .sort(undefined) is a lexicographic

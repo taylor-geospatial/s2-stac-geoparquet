@@ -5,7 +5,7 @@
 //                                 by the tile's UTM zone from 2019, Task 18;
 //                                 eight parts from 2021, Task 19)
 //   …/preview.jpg (thumbnail_url) – a scene's thumbnail: the card image, and
-//                                 the instant preview under "Show on map"
+//                                 the instant preview under a card click
 //   …/TCI.tif (next to it)      – a scene's visual COG, drawn on the map
 //                                 straight from its overviews (Task 20),
 //                                 replacing the preview as its tiles load
@@ -45,7 +45,7 @@ import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSE
   bandsOf, HIST_BINS } from "./bands.js";
 import { dayRange, valueRange } from "./rangeslider.js";
 import { sceneRows, warmPart, readTable, keyedRows } from "./search.js";
-import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf } from "./results.js";
+import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
 // deck.gl comes from its pinned dist bundle (index.html), not an ESM CDN
 // transpile: the esm.sh build draws but cannot pick. One bundle, one luma.gl.
 // A classic script that failed to load is a missing global, not an import
@@ -149,10 +149,20 @@ const $ = (id) => document.getElementById(id);
 // ?debug logs the COG timeline (preview shown, viewport loaded) to the console.
 const DEBUG = new URLSearchParams(location.search).has("debug");
 const debug = (...args) => { if (DEBUG) console.info(...args); };
-const say = (msg, isError = false) => {
+// The status line shows only what the user must act on: an error (true) or
+// a warning ("warn"), such as a missing stats product. A progress message
+// takes the line down again and goes to the ?debug console, so the panel
+// stays short and the tile and scene box carries what is picked.
+const say = (msg, level = false) => {
   const el = $("status");
+  if (!level) {
+    el.hidden = true;
+    debug(`[status] ${msg}`);
+    return;
+  }
   el.textContent = msg;
-  el.classList.toggle("error", isError);
+  el.hidden = false;
+  el.classList.toggle("error", level === true);
 };
 
 // ---------------------------------------------------------------------------
@@ -215,15 +225,21 @@ const WANT = {
     location.assign(url);
   });
   $("title").textContent = COL.title;
-  $("sub").textContent = `${COL.title} scenes since ${COL.since} — every query on this page `
-    + "is a range read against static GeoParquet on Source Cooperative; there is no API.";
+  $("sub").textContent = `Scenes since ${COL.since}, read from static files. No API.`;
+  $("sub-info").dataset.tip = `${COL.title} scenes since ${COL.since}. Every query on this `
+    + "page is an HTTP range read against static GeoParquet on Source Cooperative. Each "
+    + "image is read from the scene's Cloud-Optimized GeoTIFFs and drawn in the browser. "
+    + "There is no API, no tile server and no database. Open the \"API request\" box under the "
+    + "results to see the STAC query the page did not make.";
 }
 
 // hideTipFor(el) lets code outside this block close the popover for one
 // anchor (setTip calls it when a nav button's caption changes or clears).
-// The popover block below replaces it with the real function at load; this
-// stub only guards a call that somehow lands before that.
+// wireTip(el, pinnable) wires an anchor built after load, such as a result
+// card's render icons. The popover block below replaces both with the real
+// functions at load; these stubs only guard a call that lands before that.
 let hideTipFor = () => {};
+let wireTip = () => {};
 
 // The shared info/hover popover. One #tip element serves every
 // `button.info` and the image nav's prev/next caption, instead of the one
@@ -327,6 +343,27 @@ let hideTipFor = () => {};
     if (el === pinned) pinned = null;
     if (el === activeAnchor) hide();
   };
+  wireTip = wire;
+}
+
+// The welcome: shown once per browser, on the first visit, and again from
+// the About button. The flag is a per-browser convenience, so a browser
+// that refuses storage just sees the welcome on every visit. A page under
+// automation (navigator.webdriver) skips it: the modal would block the
+// headless checks' clicks on the map.
+{
+  const KEY = "s2-explorer.welcomed";
+  const dlg = $("welcome");
+  $("about").addEventListener("click", () => dlg.showModal());
+  dlg.addEventListener("close", () => {
+    try { localStorage.setItem(KEY, "1"); } catch { /* no storage: ask again next time */ }
+  });
+  // A click on the backdrop (the dialog box itself, outside its content)
+  // closes it too.
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+  let seen = false;
+  try { seen = localStorage.getItem(KEY) === "1"; } catch { /* treated as a first visit */ }
+  if (!seen && !navigator.webdriver) dlg.showModal();
 }
 
 const protocol = new Protocol();
@@ -931,7 +968,7 @@ let paintSeq = 0;
 
 async function paintWindow() {
   if (!S.from || !S.to) return;
-  if (statsMissing) { say(statsNote); return; }
+  if (statsMissing) { say(statsNote, "warn"); return; }
   const metric = $("metric").value;
   if (!METRICS.has(metric)) throw new Error(`unknown metric ${metric}`);
   const seq = ++paintSeq;
@@ -959,12 +996,15 @@ async function paintWindow() {
   if (!lookup.size) {
     say(`No tile-months in the published stats for ${S.from} → ${S.to}. `
       + "Pick a window with bars in the timeline below."
-      + trouble + (note ? ` ${note}` : ""));
+      + trouble + (note ? ` ${note}` : ""), "warn");
     return;
   }
+  // The count is progress. A failed slice or the lag note is a warning, and
+  // only that part stays on screen.
+  const warning = (trouble + (note ? ` ${note}` : "")).trim();
+  if (warning) { say(warning, "warn"); return; }
   say(`${lookup.size.toLocaleString()} MGRS tiles imaged in ${S.from} → ${S.to} — `
-    + `${have} month slice${have === 1 ? "" : "s"}, no API call. ${filterLine()}.`
-    + trouble + (note ? ` ${note}` : ""));
+    + `${have} month slice${have === 1 ? "" : "s"}, no API call. ${filterLine()}.`);
 }
 
 // All tiles: the timeline file, already in memory, one row per month. One
@@ -1413,7 +1453,7 @@ async function init() {
   if (!span) {
     say("The stats timeline has no rows yet — the backfill has not published "
       + "any tile-months. The map and timeline will fill in once it does."
-      + collectionNote);
+      + collectionNote, "warn");
     await timelineFor(null);
     return;
   }
@@ -1479,7 +1519,7 @@ async function initWithoutStats() {
       ? `Scenes are published through ${newestYear} — click a tile and search.`
       : "No year parts are published yet either; a search will say so.")
     + collectionNote;
-  say(statsNote);
+  say(statsNote, "warn");
   // A hash's tile still searches: startSearch says it itself when the year
   // has no published parts.
   await restoreSearch();
@@ -1545,23 +1585,138 @@ function currentView() {
 }
 
 function updateFilterStatus() {
-  if (!S.search) { say(`${filterLine()}.`); return; }
+  if (!S.search) { $("rescount").textContent = ""; say(`${filterLine()}.`); return; }
   // The mirror shows the request the page did not make, so it tracks the
   // filters the user sees, not the ones the last read ran under. A slider
   // drag rewrites it with the rest of the apply.
   $("api").textContent = apiMirror(S.search.tile, S.from, S.to, S.maxCloud, S.minCoverage);
   const view = currentView();
+  $("rescount").textContent = `${view.length} of ${S.search.rows.length} scenes`;
   say(`${view.length} of ${S.search.rows.length} ${S.search.tile} scenes in `
     + `${S.search.year} pass (${S.from} → ${S.to}, cloud ≤ ${S.maxCloud}, `
     + `coverage ≥ ${S.minCoverage}) — one year of parts range-read once, `
     + `filters run in the page.`);
 }
 
+// The first tile click of a page with nothing picked yet tightens the two
+// scene filters to values that suit a scene search: max cloud 40, min
+// coverage 25. A slider the user already moved keeps its value, and a page
+// that already has a tile or a shown scene (a click, or a shared link) keeps
+// both, so this never overrides a choice.
+const FIRST_TILE = { maxcloud: 40, mincoverage: 25 };
+function firstTileDefaults() {
+  if (S.tile || S.displayedId) return;
+  let moved = false;
+  for (const [id, v] of Object.entries(FIRST_TILE)) {
+    const input = $(id);
+    if (input.value !== input.defaultValue) continue;
+    input.value = String(v);
+    $(`${id}-out`).textContent = String(v);
+    moved = true;
+  }
+  if (!moved) return;
+  S.maxCloud = Number($("maxcloud").value);
+  S.minCoverage = Number($("mincoverage").value);
+  repaint();
+}
+
 map.on("click", (e) => {
   const tile = hitIndex.at(e.lngLat.wrap().lng, e.lngLat.lat)?.tile;
   if (!TILE_RE.test(tile ?? "")) return;
+  firstTileDefaults();
   selectTile(tile);
 });
+
+// The tile and scene box at the top of the panel. The scene id links to the
+// scene's static STAC item (the <id>.json in the scene's directory on AWS,
+// the item's `canonical` link) opened in the Portolan Browser.
+const STAC_BROWSER = "https://browser.portolan-sdi.org/#/external/";
+function stacItemUrl(r) {
+  try {
+    const u = new URL(`${sceneDirOf(r)}/${encodeURIComponent(String(r.id))}.json`);
+    return `${STAC_BROWSER}${u.host}${u.pathname}`;
+  } catch {
+    return null;
+  }
+}
+function syncSelBox() {
+  const tile = S.tile;
+  const r = shown?.r ?? null;
+  $("sel-hint").hidden = Boolean(tile || r);
+  $("sel-tile-row").hidden = !tile;
+  $("sel-tile").textContent = tile ?? "";
+  $("sel-scene-row").hidden = !r;
+  const a = $("sel-scene");
+  a.textContent = r ? String(r.id) : "";
+  const href = r ? stacItemUrl(r) : null;
+  if (href) a.href = href; else a.removeAttribute("href");
+  syncFiltered();
+}
+
+// The scene on the map when the current filters hide it: its row in the
+// active search, or null when it passes (or nothing is shown). A scene the
+// search does not hold at all (another tile's) is not this case.
+function filteredShown() {
+  if (!shown || !S.search) return null;
+  const row = S.search.rows.find((r) => r.id === shown.r.id);
+  return row && whyFiltered(row, currentFilters()).length ? row : null;
+}
+
+// The amber state: the scene box says why the shown scene is hidden and
+// offers the two ways back, and the image panel's bar turns amber with it.
+// Called from every path that changes the shown scene or the filters
+// (syncSelBox and renderScrubber).
+function syncFiltered() {
+  const row = filteredShown();
+  const why = row ? whyFiltered(row, currentFilters()) : [];
+  $("selbox").classList.toggle("filtered", why.length > 0);
+  $("imgpanel").classList.toggle("filtered", why.length > 0);
+  $("sel-filtered").hidden = !why.length;
+  $("sel-why").textContent = why.map((w) => w.text).join("; ");
+  $("sel-nearest").disabled = !currentView().length;
+  $("filterbanner").hidden = !why.length;
+  $("fb-why").textContent = why.map((w) => w.text).join("; ");
+  $("fb-nearest").disabled = !currentView().length;
+}
+
+// "Include it": loosen each gate the shown scene fails to exactly the value
+// that admits it, and leave every other gate as it is. A month lock that
+// excludes the day is released back to the whole year, the lock's own ✕.
+$("sel-include").addEventListener("click", includeShown);
+$("fb-include").addEventListener("click", includeShown);
+function includeShown() {
+  const row = filteredShown();
+  if (!row) return;
+  let sliders = false;
+  for (const w of whyFiltered(row, currentFilters())) {
+    if (w.gate === "date") {
+      if (S.monthLock) unlockMonth();
+      else dateRange?.set(w.from ?? S.from, w.to ?? S.to);
+    } else {
+      const id = w.gate === "cloud" ? "maxcloud" : "mincoverage";
+      $(id).value = String(w.value);
+      $(`${id}-out`).textContent = String(w.value);
+      sliders = true;
+    }
+  }
+  if (sliders) {
+    S.maxCloud = Number($("maxcloud").value);
+    S.minCoverage = Number($("mincoverage").value);
+    repaint();
+    scheduleApply({ cards: true, nav: true });
+  }
+}
+
+// "Nearest match": the scene that passes, at the position the hidden one
+// last held in the sort order, the same place ‹ › step in from.
+function showNearest() {
+  const view = currentView();
+  if (!view.length) return;
+  showIndex(clampIndex(view, S.detachedAt));
+}
+$("sel-nearest").addEventListener("click", showNearest);
+$("fb-nearest").addEventListener("click", showNearest);
+$("fb-clear").addEventListener("click", () => clearShown());
 
 // The click is the search. The date inputs, not S, carry the window here:
 // the headless gate writes their .value directly with no events, and a
@@ -1570,8 +1725,9 @@ function selectTile(tile, opts) {
   S.tile = tile;
   timelineFor(tile);
   const d0 = $("date0").value, d1 = $("date1").value;
+  syncSelBox();
   if (!d0 || !d1) {
-    $("query").querySelector(".hint").textContent = `Tile ${tile}. Pick a window first.`;
+    say(`Tile ${tile}: pick a date window first.`, "warn");
     return;
   }
   if (d1 < d0) { say("The window ends before it starts — swap the two dates.", true); return; }
@@ -1579,7 +1735,6 @@ function selectTile(tile, opts) {
   S.to = d1;
   const year = Number(d0.slice(0, 4));
   if (year !== S.year) { S.year = year; $("year").value = String(year); }
-  $("query").querySelector(".hint").textContent = `Tile ${tile}.`;
   // The search is returned, not only started, so the hash restore can wait
   // for the rows before it looks for its scene. A click ignores the promise,
   // the way it always has. `opts` only carries the restore's flyFirst: false
@@ -1884,10 +2039,12 @@ function cogbar(id, state, text) {
   $("cog-state").textContent = text;
   $("cogbar").hidden = false;
   $("imgpanel").hidden = false;
+  syncSelBox();
 }
 // The image panel at the map's lower right (Task 29) holds the cogbar and
 // the band mapper; it shows with the first cogbar and goes with the scene.
 function hideImagePanel() {
+  syncSelBox();
   $("imgpanel").hidden = true;
   $("cogbar").hidden = true;
   $("imgnav").hidden = true;
@@ -2560,6 +2717,7 @@ function renderScrubber() {
   scrub.value = String(at >= 0 ? at : Math.max(0, clampIndex(view, S.detachedAt)));
   const detached = !!shown && view.length > 0 && at < 0;
   scrub.toggleAttribute("data-detached", detached);
+  syncFiltered();
   if (detached) {
     label.hidden = false;
     label.textContent = `${shown.id} · outside the current filters`;
@@ -2733,7 +2891,7 @@ async function showTci(me, spec, serial) {
   }
 }
 
-// "Show on map" button: fly to the scene's footprint,
+// A card click or a card's render icon: fly to the scene's footprint,
 // remember the scene, set the panel to the asked preset and apply it.
 // `button` is the control to disable while the read runs. It is null when
 // the page itself asks for a scene (showIndex), because no control was hit.
@@ -2793,26 +2951,33 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   }
 }
 
-$("cog-clear").addEventListener("click", () => {
+$("cog-clear").addEventListener("click", clearShown);
+// Take the shown scene off the map: the image panel's Clear, and the
+// filtered-out scene's ✕ on its card and on the map banner. The results
+// re-render so a pinned filtered-out card goes with it.
+function clearShown() {
   shown = null;
   S.displayedId = null;
   cogLayer = null;
   cogPreview = null;
   render();
   hideImagePanel();
+  renderResultsNow();
+  scheduleApply({ nav: true });
   // The one state change that does not go through applyNow. Without this the
   // URL would keep a scene the page no longer shows.
   scheduleHashWrite();
-});
+}
 
 // The panel's controls. A band select under a preset switches it to Custom
 // (the single-band pick stays Single band); the rest apply as they are.
-$("preset").addEventListener("change", () => { ui.preset = $("preset").value; applySpec(); });
+$("preset").addEventListener("change", () => { ui.preset = $("preset").value; applySpec(); renderResults(); });
 for (const [i, id] of ["sel-r", "sel-g", "sel-b"].entries()) {
   $(id).addEventListener("change", () => {
     if (PRESETS[ui.preset].kind === "gray") { ui.single = $(id).value; }
     else { ui.rgb[i] = $(id).value; ui.preset = "custom"; }
     applySpec();
+    renderResults();
   });
 }
 for (const radio of document.querySelectorAll('input[name="curve"]')) {
@@ -2905,31 +3070,89 @@ function thumbnail(r) {
   return img;
 }
 
+// The render icons on a card, in the order the user asked for them. Each
+// one shows the scene with that preset (bands.js PRESETS). The glyphs are
+// small inline SVGs: a swatch for the RGB composites, a ramp for the two
+// indices, so no icon font or image request is needed. The two index ramps
+// are defined once in index.html (#icon-defs), not once per card.
+const CARD_PRESETS = [
+  ["tci", "True color",
+    '<rect x="1" y="1" width="14" height="14" rx="2" fill="#4f7a3a"/>'
+    + '<path d="M1 11l4-4 3 3 3-4 4 5v3a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z" fill="#c9b27c"/>'
+    + '<circle cx="11.5" cy="4.5" r="1.8" fill="#8fc0ff"/>'],
+  ["ndvi", "NDVI (vegetation): NIR vs red, brown to green",
+    '<rect x="1" y="1" width="14" height="14" rx="2" fill="url(#gi-ndvi)"/>'
+    + '<path d="M8 13V7M8 9c-3 0-4-2-4-4 2 0 4 1 4 4zm0-1c0-3 2-4 4-4 0 2-1 4-4 4z" '
+    + 'stroke="#0b1020" stroke-width="1.2" fill="none"/>'],
+  ["ndwi", "NDWI (water): green vs NIR, brown to blue",
+    '<rect x="1" y="1" width="14" height="14" rx="2" fill="url(#gi-ndwi)"/>'
+    + '<path d="M8 3c2 3 3.5 4.6 3.5 6.4a3.5 3.5 0 0 1-7 0C4.5 7.6 6 6 8 3z" '
+    + 'stroke="#0b1020" stroke-width="1.2" fill="none"/>'],
+  ["fcir", "False color IR (B08, B04, B03): vegetation shows red",
+    '<rect x="1" y="1" width="14" height="14" rx="2" fill="#2b3f66"/>'
+    + '<path d="M1 10c3-3 5 1 8-2s4-1 6 0v5a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z" fill="#d7263d"/>'
+    + '<circle cx="5" cy="5" r="2.2" fill="#e8687a"/>'],
+  ["swir", "SWIR (B12, B8A, B04): burn scars, soil and moisture",
+    '<rect x="1" y="1" width="14" height="14" rx="2" fill="#3f7a3a"/>'
+    + '<path d="M1 12l5-5 3 3 2-2 4 4v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z" fill="#b5651d"/>'
+    + '<circle cx="11" cy="5" r="2" fill="#6ec3ff"/>'],
+];
+
+// Show a card's scene, through the nav state so every indicator follows it:
+// showOnMap alone leaves S.displayedId on the previously shown scene, and
+// the .current outline, the scrub thumb, the ‹/› steps and the hash's
+// scene= all keep pointing there. A card click is an explicit "frame this
+// scene", so it flies. The fallback covers a row that fell out of the view
+// between the render that built this card and the click on it.
+function showCard(r, preset) {
+  if (preset) ui.preset = preset;
+  const at = indexOfId(currentView(), r.id);
+  if (at >= 0) showIndex(at, true);
+  else showOnMap(r, null, ui.preset);
+}
+
 function buildCard(r) {
   const card = el("div", "scene");
+  // The whole card is the "show on map" target, for the pointer and for
+  // the keyboard.
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  card.setAttribute("aria-label", `Show ${r.id} on the map`);
   if (typeof r.thumbnail_url === "string" && r.thumbnail_url) card.append(thumbnail(r));
   const cap = document.createElement("div");
   cap.append(el("b", null, r.id), document.createElement("br"));
   cap.append(`${String(r.ts).slice(0, 10)} · ${Number(r.cloud).toFixed(1)}% cloud`);
   cap.append(document.createElement("br"));
   const actions = el("span", "actions");
-  const show = el("button", "mini", "Show on map");
-  show.type = "button";
-  show.title = "Fly to the footprint and draw the visual COG on the map";
-  // The card click goes through the nav state so every indicator follows it:
-  // showOnMap alone leaves S.displayedId on the previously shown scene, and
-  // the .current outline, the scrub thumb, the ‹/› steps and the hash's
-  // scene= all keep pointing there. A card click is an explicit "frame this
-  // scene", so it flies. The fallback covers a row that fell out of the view
-  // between the render that built this card and the click on it.
-  show.addEventListener("click", () => {
-    const at = indexOfId(currentView(), r.id);
-    if (at >= 0) showIndex(at, true);
-    else showOnMap(r, show);
-  });
-  actions.append(show);
+  for (const [key, tip, svg] of CARD_PRESETS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.preset = key;
+    b.dataset.tip = tip;
+    b.setAttribute("aria-label", `Show as ${tip}`);
+    b.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${svg}</svg>`;
+    // The icon picks the preset; the card's own click must not run a
+    // second show.
+    b.addEventListener("click", (e) => { e.stopPropagation(); showCard(r, key); });
+    wireTip(b, false);
+    actions.append(b);
+  }
   cap.append(actions);
   card.append(cap);
+  // Only visible on the pinned filtered-out card (style.css): clears the
+  // scene, and the card goes with it.
+  const unpin = el("button", "mini unpin", "✕");
+  unpin.type = "button";
+  unpin.title = "Clear this scene and show only the matching results";
+  unpin.setAttribute("aria-label", unpin.title);
+  unpin.addEventListener("click", (e) => { e.stopPropagation(); clearShown(); });
+  card.append(unpin);
+  card.addEventListener("click", () => showCard(r));
+  card.addEventListener("keydown", (e) => {
+    if (e.target !== card || (e.key !== "Enter" && e.key !== " ")) return;
+    e.preventDefault();
+    showCard(r);
+  });
   return card;
 }
 
@@ -3066,18 +3289,36 @@ function renderResultsNow() {
       `0 of ${S.search.rows.length} scenes pass — widen a slider or the date window.`));
     const b = widenButton();
     if (b) { b.addEventListener("click", widenWindow); box.append(b); }
+    const hidden = filteredShown();
+    if (hidden) {
+      const card = cardFor(hidden);
+      card.classList.add("filtered", "current");
+      card.classList.remove("best");
+      box.prepend(card);
+    }
     return;
   }
   const want = view.slice(0, S.shown).map(cardFor);
+  // The scene on the map, when the filters hide it, stays in the list: its
+  // own card, dimmed and tagged, pinned above the ones that pass.
+  const hidden = filteredShown();
+  if (hidden) want.unshift(cardFor(hidden));
   let node = box.firstElementChild;
   for (const w of want) {
     if (node === w) { node = node.nextElementSibling; continue; }
     box.insertBefore(w, node);
   }
   while (node) { const next = node.nextElementSibling; node.remove(); node = next; }
+  const rowsShown = hidden ? [hidden, ...view] : view;
   for (const [i, w] of want.entries()) {
-    w.classList.toggle("best", i === 0 && S.sort === "cloud");
-    w.classList.toggle("current", view[i].id === S.displayedId);
+    const row = rowsShown[i];
+    w.classList.toggle("filtered", row === hidden);
+    w.classList.toggle("best", row === view[0] && S.sort === "cloud");
+    const current = row.id === S.displayedId;
+    w.classList.toggle("current", current);
+    for (const b of w.querySelectorAll(".actions button")) {
+      b.classList.toggle("on", current && b.dataset.preset === ui.preset);
+    }
   }
   renderMore(box, view.length);
 }
