@@ -397,6 +397,61 @@ const map = new maplibregl.Map({
   attributionControl: { compact: true },
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+
+// The basemap's labels, on a switch beside the zoom buttons. Place names help
+// a reader place a scene, and they also sit over the imagery the reader came
+// to look at, so the choice is theirs. The switch hides every symbol layer of
+// the style, which is the place names, the water names, the road names and
+// the two icon layers.
+//
+// The choice is one reader's preference, so it lives in localStorage and not
+// in the share hash. A shared link names a tile, a scene and a camera. It
+// does not carry how somebody likes their map.
+//
+// visibility, not removal: the first label layer is also the slot every
+// explorer layer sits before (LABELS_FROM), and a removed layer is not a slot.
+const LABELS_KEY = "s2-explorer.labels";
+const LABEL_LAYERS = baseStyle.layers.filter((l) => l.type === "symbol").map((l) => l.id);
+let labelsOn = true;
+try { labelsOn = localStorage.getItem(LABELS_KEY) !== "0"; } catch { /* no storage: labels on */ }
+
+function paintLabelSwitch(btn) {
+  btn.setAttribute("aria-pressed", String(labelsOn));
+  btn.title = labelsOn ? "Hide the basemap labels" : "Show the basemap labels";
+  btn.setAttribute("aria-label", btn.title);
+}
+function applyLabels() {
+  for (const id of LABEL_LAYERS) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", labelsOn ? "visible" : "none");
+  }
+}
+// A MapLibre control is an object with onAdd and onRemove, so this needs no
+// class of its own.
+const labelSwitch = {
+  onAdd() {
+    const box = document.createElement("div");
+    box.className = "maplibregl-ctrl maplibregl-ctrl-group";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "labelswitch";
+    btn.textContent = "A";
+    paintLabelSwitch(btn);
+    btn.addEventListener("click", () => {
+      labelsOn = !labelsOn;
+      try { localStorage.setItem(LABELS_KEY, labelsOn ? "1" : "0"); } catch { /* not remembered */ }
+      applyLabels();
+      paintLabelSwitch(btn);
+    });
+    box.appendChild(btn);
+    this._box = box;
+    return box;
+  },
+  onRemove() { this._box.remove(); },
+};
+// The flat fallback style has no labels, and a switch with nothing to switch
+// is worse than no switch.
+if (LABEL_LAYERS.length) map.addControl(labelSwitch, "top-right");
+
 // Registered before any await, so a fast style load cannot be missed.
 const mapReady = new Promise((resolve) => map.on("load", resolve));
 
@@ -429,6 +484,10 @@ const DIMMED = [70, 78, 96, 70];                  // clearest scene over the sli
 const HOVER_LINE = [232, 240, 255, 255];          // #e8f0ff
 
 await mapReady;
+
+// The label switch remembers a reader who turned the labels off last visit.
+// The layers exist only once the style is loaded, so this waits for it.
+applyLabels();
 
 // The camera a shared link asked for. jumpTo, not flyTo: the link names the
 // view the reader wants, not a trip to it. The choropleth does not read the

@@ -433,6 +433,19 @@ button.mini:not(:disabled):hover { background: #26457a; }
 #welcome-go { background: #1d365e; border-color: #2b4c86; padding: 6px 14px; }
 #welcome-go:hover { background: #26457a; }
 
+/* The basemap label switch, under the zoom buttons. MapLibre's own control
+   buttons carry a background icon and set no type, so a button with a letter
+   in it needs one here. The struck-through grey is the off state, which is
+   the same read as a muted icon without a second glyph to draw. */
+#labelswitch {
+  font: 700 14px/29px system-ui, -apple-system, sans-serif;
+  color: #333;
+}
+#labelswitch[aria-pressed="false"] {
+  color: #9aa3b2;
+  text-decoration: line-through;
+}
+
 /* ---------------------------------------------------------------------- *
  * The phone layout: the map is the page.
  *
