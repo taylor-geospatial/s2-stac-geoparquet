@@ -368,10 +368,31 @@ let wireTip = () => {};
 
 const protocol = new Protocol();
 maplibregl.addProtocol("pmtiles", protocol.tile);
+
+// The basemap. Carto's Dark Matter is a free MapLibre vector style. It needs
+// no key, and its TileJSON carries the OpenStreetMap and Carto attribution
+// that the attribution control shows. A CDN that does not answer must not
+// stop the explorer, so the style is fetched under a short deadline and a
+// failure falls back to the flat background the map carried before. Every
+// layer above the basemap is the same either way.
+const BASEMAP_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+const BASEMAP_MS = 6000;
+const FLAT_STYLE = { version: 8, sources: {}, layers: [
+  { id: "bg", type: "background", paint: { "background-color": "#0b1020" } }] };
+const baseStyle = await fetch(BASEMAP_URL, { signal: AbortSignal.timeout(BASEMAP_MS) })
+  .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+  .catch((err) => {
+    console.warn(`Basemap ${BASEMAP_URL} did not load (${err.message}); flat background instead`);
+    return FLAT_STYLE;
+  });
+// The first label layer of the style above. Every layer the explorer draws
+// goes before it, so place names stay legible over the choropleth and over a
+// scene at full resolution. The flat fallback has no labels, and then the
+// slot is null and each layer lands on top as it did before.
+const LABELS_FROM = baseStyle.layers.find((l) => l.type === "symbol")?.id ?? null;
 const map = new maplibregl.Map({
   container: "map",
-  style: { version: 8, sources: {}, layers: [
-    { id: "bg", type: "background", paint: { "background-color": "#0b1020" } }] },
+  style: baseStyle,
   center: [10, 30], zoom: 2,
   attributionControl: { compact: true },
 });
@@ -469,7 +490,8 @@ map.addLayer({ id: "mgrs-line", type: "line", source: "mgrs",
   "source-layer": "mgrs",
   // Subtle on purpose: the choropleth is the picture and the grid only
   // separates the cells, so it sits at a quarter opacity.
-  paint: { "line-color": "#8899bb", "line-width": 0.4, "line-opacity": 0.25 } });
+  paint: { "line-color": "#8899bb", "line-width": 0.4, "line-opacity": 0.25 } },
+LABELS_FROM ?? undefined);
 // MVTLayer asks for "{z}/{x}/{y}" of its data template; the bytes come from
 // the PMTiles archive (one range read per tile, cached by the library) and
 // are parsed on this thread with loaders.gl's MVTLoader, using the options
@@ -697,6 +719,11 @@ Object.defineProperties(window.S2, {
   viewIds: { value: () => currentView().map((r) => r.id) },
 });
 
+// The scene layers belong under the basemap's labels, where the choropleth
+// already sits. cog.js builds them, so the slot is cloned in here instead of
+// being passed down through three constructors.
+const underLabels = (layer) => (layer && LABELS_FROM ? layer.clone({ beforeId: LABELS_FROM }) : layer);
+
 function render() {
   overlay.setProps({ layers: [
     new MVTLayer({
@@ -713,9 +740,9 @@ function render() {
       updateTriggers: { getFillColor: paintKey },
       beforeId: "mgrs-line",
     }),
-    cogPreview,
-    cogLayer,
-    scrubLayer,
+    underLabels(cogPreview),
+    underLabels(cogLayer),
+    underLabels(scrubLayer),
     new GeoJsonLayer({
       id: "mgrs-hover",
       data: hovered ? [hovered] : [],
@@ -2261,24 +2288,32 @@ function flyToImage(bbox) {
   map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 800 });
 }
 
-// How much of the shown image's bbox the viewport holds, 0..1. The button
-// enables under 0.5 and disables over 0.65: the gap stops it from
-// flickering while the camera settles.
-function imageFraction() {
+// The shown image's bbox against the viewport, as two fractions of the part
+// they share: `seen` is how much of the image the viewport holds, and `fills`
+// is how much of the viewport the image covers. Both are 1 with nothing
+// shown, which is the reading that leaves the button alone.
+function imageCover() {
   const b = shown ? bboxOf(shown.r) : null;
-  if (!b) return 1;
+  if (!b) return { seen: 1, fills: 1 };
   const mb = map.getBounds();
   const w = Math.max(0, Math.min(b[2], mb.getEast()) - Math.max(b[0], mb.getWest()));
   const h = Math.max(0, Math.min(b[3], mb.getNorth()) - Math.max(b[1], mb.getSouth()));
-  const area = (b[2] - b[0]) * (b[3] - b[1]);
-  return area > 0 ? (w * h) / area : 1;
+  const over = w * h;
+  const image = (b[2] - b[0]) * (b[3] - b[1]);
+  const view = (mb.getEast() - mb.getWest()) * (mb.getNorth() - mb.getSouth());
+  return { seen: image > 0 ? over / image : 1, fills: view > 0 ? over / view : 1 };
 }
 let zoomtoOn = false;
 function syncZoomTo() {
   if (!shown) { zoomtoOn = false; $("zoomto").disabled = true; return; }
-  const frac = imageFraction();
-  if (!zoomtoOn && frac < 0.5) zoomtoOn = true;
-  else if (zoomtoOn && frac > 0.65) zoomtoOn = false;
+  const { seen, fills } = imageCover();
+  // A camera loses the scene in two ways. It pans or zooms in until most of
+  // the scene is off screen, and `seen` falls. It zooms out until the scene
+  // is a speck, and `fills` falls while `seen` stays at 1. Each test has a
+  // gap between its on and its off threshold, so the button does not flicker
+  // while the camera settles.
+  if (!zoomtoOn && (seen < 0.5 || fills < 0.05)) zoomtoOn = true;
+  else if (zoomtoOn && seen > 0.65 && fills > 0.1) zoomtoOn = false;
   $("zoomto").disabled = !zoomtoOn;
 }
 let zoomFrame = 0;
