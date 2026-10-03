@@ -13,11 +13,11 @@
 # approved rather than per-account keys it issues. The two are the same bytes
 # through different doors: the repository is a key prefix here, where at the
 # gateway it was the bucket name.
-write_prefix: s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog
+write_prefix: s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet
 
 # The public base URL that serves write_prefix. Every href in the catalog is
 # built from this, so it goes in the STAC JSON and write_prefix does not.
-public_base: https://data.source.coop/portolan-mirrors/sentinel-2-catalog
+public_base: https://data.source.coop/tge-labs/s2-stac-geoparquet
 
 region: us-west-2
 
@@ -29,7 +29,7 @@ region: us-west-2
 # The named AWS profile the publisher uses. Optional -- CI leaves it unused,
 # because configure-aws-credentials puts the assumed role in the environment
 # and publish.py prefers that whenever AWS_ACCESS_KEY_ID is set.
-profile: portolan-mirrors
+profile: tge-labs
 
 # The directory that IS the published catalog, synced 1:1 to write_prefix.
 # Nothing outside it is ever uploaded.

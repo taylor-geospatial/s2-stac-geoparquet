@@ -1,13 +1,28 @@
 # Sentinel-2 L2A scenes (item index)
 
 Every Sentinel-2 L2A scene that AWS Earth Search publishes, as one
-year-partitioned GeoParquet table you can query in place. One row per scene:
-footprint, acquisition time, MGRS tile, cloud cover, the scene-classification
-percentages, and the complete upstream STAC `assets` object.
+year-partitioned GeoParquet table you can query in place. A row is one scene.
+It states the footprint, the acquisition time, the MGRS tile, the cloud cover,
+the scene-classification percentages, and the complete upstream STAC `assets`
+object.
 
-This catalog carries no imagery. The Cloud-Optimized GeoTIFFs stay in the
-public `sentinel-cogs` bucket on AWS, and every one of their URLs is already in
-the table.
+| To do this | Go here |
+|---|---|
+| Search these scenes on a map, and draw their bands | [Scene explorer](https://research.taylorgeospatial.org/s2-stac-geoparquet/?collection=sentinel-2-l2a) |
+| Browse this collection, its items and its assets | [Portolan browser](https://browser.portolan-sdi.org/#/external/data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/collection.json) |
+| Fetch this collection's metadata | [`collection.json`](https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/collection.json) |
+| Read the upstream STAC collection | [Earth Search `sentinel-2-l2a`](https://earth-search.aws.element84.com/v1/collections/sentinel-2-l2a) |
+| Query it as an agent | [`AGENTS.md`](AGENTS.md) |
+| See the whole catalog | [catalog README](../README.md), [Source Cooperative](https://source.coop/tge-labs/s2-stac-geoparquet) |
+
+For most work, prefer
+[`sentinel-2-c1-l2a`](../sentinel-2-c1-l2a/README.md), ESA's uniform
+reprocessing of the archive. This collection mirrors Earth Search's original
+index, which reaches back only to November 2016 and repeats many early scenes.
+
+This catalog publishes no imagery. The Cloud-Optimized GeoTIFFs remain in the
+public `sentinel-cogs` bucket on AWS, and the table already reproduces each of
+their URLs.
 
 ## Query it
 
@@ -18,7 +33,7 @@ SET TimeZone = 'UTC';
 
 SELECT id, datetime, "eo:cloud_cover", thumbnail_url,
        json_extract_string(assets, '$.visual.href') AS visual_cog
-FROM read_parquet('https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=2021/z21-31.parquet')
+FROM read_parquet('https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=2021/z21-31.parquet')
 WHERE "s2:mgrs_tile" = '31UFU'
   AND _month BETWEEN 8 AND 10
   AND datetime BETWEEN '2021-08-01' AND '2021-10-15 23:59:59'
@@ -30,21 +45,20 @@ Every asset href is in the `assets` JSON-string column — no URL templates, no
 API. Swap `$.visual.href` for `$.red.href`, `$.scl.href` or any other key; the
 [agent guide](AGENTS.md) lists them all.
 
-Three things make that query cheap. A tile id and a year name the part
-(`31UFU` is zone 31, so 2021 is `z21-31.parquet`; the Layout section has
-every range), so it opens one file. Rows inside each part are sorted by
-month first (`(_month, _hilbert)` through 2025, `(_month, s2:mgrs_tile,
-_hilbert)` from 2026), so the month filter and a spatial filter both prune row
-groups. And the whole answer comes from HTTP range requests against the
-Parquet files: there is no API in front of this, so there is nothing to rate
-limit.
+That query is cheap for three reasons together. A tile id and a year
+identify the part, so `31UFU` is zone 31 and 2021 is `z21-31.parquet`, and the
+Layout section below gives every range. Rows inside each part sort by month
+first, as `(_month, _hilbert)` through 2025 and `(_month, s2:mgrs_tile,
+_hilbert)` from 2026, so a month filter and a spatial filter both prune row
+groups. The answer comes entirely from HTTP range requests against the Parquet
+files, with no API in front to queue behind.
 
-The collection's partition glob, `year=*/*.parquet`, is a Hive layout:
-`hive_partitioning = true` exposes `year` as a column that is not stored in
-the files, and a filter on it skips whole files. DuckDB expands the glob
-when it can list the store, which it can through the anonymous `s3://` door;
-over plain `https://` it does not ("Globs (`*`) for generic HTTP file are not
-supported"), so name the part as above. A year-pruned count through the glob:
+This collection sets `partition:glob` to `year=*/*.parquet`, a Hive layout.
+Setting `hive_partitioning = true` exposes `year` as a column the files
+themselves omit, and a filter on it skips whole files. DuckDB expands the glob
+when it can list the store, which the anonymous `s3://` door allows. Over plain
+`https://` it reports "Globs (`*`) for generic HTTP file are not supported", so
+name the part as above. A year-pruned count through the glob:
 
 ```sql
 INSTALL httpfs; LOAD httpfs;
@@ -53,15 +67,16 @@ SET s3_url_style = 'path';
 SET TimeZone = 'UTC';
 
 SELECT year, count(*) AS scenes, min(datetime) AS first, max(datetime) AS last
-FROM read_parquet('s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=*/*.parquet',
+FROM read_parquet('s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=*/*.parquet',
                   hive_partitioning = true)
 WHERE year IN (2016, 2017)
 GROUP BY year ORDER BY year;
 ```
 
-Two parts out of sixty are opened, and only their footers are read. A scan
-of every part is minutes, not seconds; the collection's `table:row_count`
-and temporal extent give the whole-archive answer without one.
+That opens two parts out of sixty and reads their footers. A scan of every
+part takes minutes rather than seconds, and this collection's
+`table:row_count` and temporal extent give the whole-archive answer without
+one.
 
 ## Layout
 
@@ -132,15 +147,16 @@ Items come from the
 [Earth Search STAC API](https://earth-search.aws.element84.com/v1), collection
 `sentinel-2-l2a`, which Element 84 runs over the
 [Sentinel-2 L2A COGs](https://registry.opendata.aws/sentinel-2-l2a-cogs/) on the
-AWS Registry of Open Data. Nothing is filtered, reclassified or interpolated
-here. The columns added are two sort helpers, `_month` and `_hilbert`, and they
-are documented in the [agent guide](AGENTS.md).
+AWS Registry of Open Data. No step here filters, reclassifies or interpolates
+the upstream record. The columns added are two sort helpers, `_month` and
+`_hilbert`, documented in the [agent guide](AGENTS.md).
 
 Contains modified Copernicus Sentinel data. The
 [Copernicus Sentinel Data Terms and Conditions](https://sentinels.copernicus.eu/documents/247904/690755/Sentinel_Data_Legal_Notice)
-give free, full and open access for any use; the collection states them by
-their SPDX identifier, `CC-BY-SA-3.0-IGO`. The AWS Registry of Open Data entry
-for the upstream COGs asks that you cite it as:
+grant free, full and open access for any use, and this collection states them
+by their SPDX identifier, `CC-BY-SA-3.0-IGO`. The citation for the upstream
+COGs, from their
+[AWS Registry of Open Data entry](https://registry.opendata.aws/sentinel-2-l2a-cogs/):
 
 > Sentinel-2 Cloud-Optimized GeoTIFFs, accessed on [DATE] from
 > https://registry.opendata.aws/sentinel-2-l2a-cogs.

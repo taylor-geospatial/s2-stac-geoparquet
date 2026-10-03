@@ -853,7 +853,7 @@ def test_skip_existing_builds_only_the_unpublished_parts():
             # One probe HEAD per part with the catalog's client name (DuckDB
             # adds its own HEAD when it reads a skipped part's footer).
             probes = [path for ua, path in bucket.seen
-                      if ua.startswith("sentinel-2-catalog-tools/")]
+                      if ua.startswith("s2-stac-geoparquet-tools/")]
             assert sorted(probes) == sorted(
                 f"/sentinel-2-l2a/year={year}/{lb}.parquet" for lb in OCTANT_LABELS)
             # The hook ran once per built part, in order, with the final
@@ -1157,7 +1157,7 @@ def test_exclude_ids_drops_archived_rows_and_consults_only_staged_months():
             # One probe HEAD per URL with the catalog's client name; DuckDB's
             # own requests carry its agent.
             probes = [path for ua, path in bucket.seen
-                      if ua.startswith("sentinel-2-catalog-tools/")]
+                      if ua.startswith("s2-stac-geoparquet-tools/")]
             assert sorted(probes) == ["/sentinel-2-l2a/year=2024/items.parquet",
                                       "/sentinel-2-l2a/year=2024/z01-15.parquet"]
         finally:

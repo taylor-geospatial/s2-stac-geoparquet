@@ -1,7 +1,11 @@
-# RAILS lane: Collection 1 on the TGI Slurm cluster
+<!-- vale Portolan-Mechanics.Headings = NO -->
+<!-- RAILS is the cluster name, and "Collection 1" is ESA's product. -->
+# RAILS lane: Collection 1 on the Taylor Geospatial Slurm cluster
+<!-- vale Portolan-Mechanics.Headings = YES -->
 
 The `sentinel-2-c1-l2a` collection (Earth Search's Sentinel-2 Collection 1,
-30.4 million items) is fetched, built and uploaded from the TGI RAILS
+30.4 million items) is fetched, built and uploaded from the Taylor
+Geospatial RAILS
 cluster, not from GitHub runners. A year of Collection 1 is one file of up
 to 5 million rows; a GitHub job has 6 hours and 14 GB of disk, a RAILS
 node has 192 CPUs, 512 GB of memory and shared storage. This directory is
@@ -15,8 +19,8 @@ technique this replaces for Collection 1, is in
 
 | Fact | Consequence |
 |---|---|
-| Slurm; account `bgtj-tgirails`, partition `cpu` | Every script carries both `#SBATCH` lines. |
-| Nodes: 192 CPUs, 512 GB | A year build asks for a shared slice (`--cpus-per-task=64 --mem=300g`). `--exclusive` never schedules while the fetch array occupies every node. |
+| Slurm; account `bgtj-tgirails`, partition `cpu` | Both `#SBATCH` lines appear in every script. |
+| Nodes: 192 CPUs, 512 GB | A year build requests a shared slice (`--cpus-per-task=64 --mem=300g`). `--exclusive` never schedules while the fetch array occupies every node. |
 | `/tmp` is a 64 GB tmpfs | Too small for a year file or a year build's DuckDB spill; slices, builds and those spills live on `/u`. The month fold spills there on purpose (`fold_month.py`, `FOLD_TMP`): a spill on `/u` failed with "Could not read enough bytes from file", and a month fits. |
 | `/u` is shared project space (925 TB) | `$SLICES=/u/cholmes/s2-c1/slices`, `$PUBLISH=/u/cholmes/s2-c1/publish`; a job on any node reads what another wrote. |
 | The login node reaps long processes | Everything runs through `sbatch`. `build_ready_years.sh` is the one script that runs on the login node, for seconds. |
@@ -57,18 +61,21 @@ Only `upload_year.sbatch` and `fold_live.sbatch` write to the bucket. They
 run as the AWS profile `source-coop`. The `[default]` profile in
 `~/.aws/credentials` on RAILS is another account (417712557820) and gets
 `AccessDenied` on the catalog prefix; leave it alone, the scripts name
-their profile. Two ways to create `source-coop`; (b) is preferred because
-the role is the identity every GitHub workflow already writes with, and
-the user's own keys then hold no S3 permission at all.
+their profile. Prefer option (b) below for creating `source-coop`, because
+the role is the identity every GitHub workflow already writes with, and the
+user's own keys then need no S3 permission at all.
 
 **Both ways start with an IAM user** in the bucket's account
-(939788573396): create the user `rails-sentinel-2-catalog` with no
-console access, create one access key pair for it, and write the keys to
-`/u/cholmes/.aws/credentials` (`~/.aws` on RAILS) with `chmod 600`.
+(939788573396). Create the user `rails-sentinel-2-catalog` with no console
+access. Create one access key pair for it, then write the keys to
+`/u/cholmes/.aws/credentials` (`~/.aws` on RAILS) with `chmod 600`. The
+user keeps that name from the catalog's first published location. An IAM
+user name is not a URL, so renaming it buys nothing and invalidates the
+keys already on RAILS.
 
 **(a) The user writes directly.** Attach
 [`iam-policy.json`](iam-policy.json) to the user: `s3:ListBucket` on the
-bucket with an `s3:prefix` condition of `portolan-mirrors/sentinel-2-catalog/*`,
+bucket with an `s3:prefix` condition of `tge-labs/s2-stac-geoparquet/*`,
 and `s3:GetObject`, `s3:PutObject`, `s3:AbortMultipartUpload`,
 `s3:ListMultipartUploadParts` on the objects under that prefix. Nothing
 else, and no delete: publishing never deletes.
@@ -84,16 +91,18 @@ aws_secret_access_key = ...
 region = us-west-2
 ```
 
-**(b) The user assumes the Source Cooperative role.** Add the statement in
+**(b) The user assumes the Source Cooperative role.** The role is the one
+Source Cooperative provisions for the `tge-labs` organization. Its ARN is
+the repository variable `SOURCE_COOP_ROLE_ARN`, which every GitHub
+workflow reads; `$ROLE` below stands for that value. Add the statement in
 [`role-trust-statement.json`](role-trust-statement.json) to the trust
-policy of `arn:aws:iam::939788573396:role/source-coop-portolan-mirrors`
-(IAM console, the role, "Trust relationships", "Edit trust policy"; paste
-it as one more element of `Statement`). It names the user's ARN
-explicitly, so the user needs no policy of its own: a same-account
-principal named in a role's trust policy can assume it without an
-identity-based `sts:AssumeRole` allow. (If STS still answers
+policy of `$ROLE` (IAM console, the role, "Trust relationships", "Edit
+trust policy"; paste it as one more element of `Statement`). It names the
+user's ARN explicitly, so the user needs no policy of its own: a
+same-account principal named in a role's trust policy can assume it
+without an identity-based `sts:AssumeRole` allow. (If STS still answers
 `AccessDenied`, attach this inline policy to the user:
-`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"arn:aws:iam::939788573396:role/source-coop-portolan-mirrors"}]}`.)
+`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"sts:AssumeRole","Resource":"$ROLE"}]}`.)
 Then the profile chain:
 
 ```ini
@@ -107,7 +116,7 @@ aws_secret_access_key = ...
 region = us-west-2
 
 [profile source-coop]
-role_arn = arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+role_arn = <the SOURCE_COOP_ROLE_ARN value>
 source_profile = rails-user
 region = us-west-2
 ```
@@ -126,7 +135,7 @@ source ~/s2-catalog/tools/rails/env.sh
 python3 - <<'EOF'
 import boto3, datetime
 s = boto3.Session(profile_name="source-coop"); print(s.client("sts").get_caller_identity()["Arn"])
-s3, b, k = s.client("s3"), "us-west-2.opendata.source.coop", "portolan-mirrors/sentinel-2-catalog/_work/write-test.txt"
+s3, b, k = s.client("s3"), "us-west-2.opendata.source.coop", "tge-labs/s2-stac-geoparquet/_work/write-test.txt"
 s3.put_object(Bucket=b, Key=k, Body=datetime.datetime.now(datetime.timezone.utc).isoformat().encode()); print("put ok:", s3.head_object(Bucket=b, Key=k)["ContentLength"], "bytes")
 try: s3.delete_object(Bucket=b, Key=k); print("delete ok")
 except s3.exceptions.ClientError as e: print("delete denied (expected under option a):", e.response["Error"]["Code"])
@@ -154,15 +163,15 @@ next run). Two switches, both environment variables passed with
 | Script | Submit | Does |
 |---|---|---|
 | `fetch_months.sbatch` | `sbatch --array=0-131%8 tools/rails/fetch_months.sbatch` | One month per array task from `months.txt` (`months.py`): `s2_fetch` day chunks into `$SLICES/YYYY-MM/api/`, then `fold_month.py` writes `$SLICES/YYYY-MM.parquet` (zstd 3). An empty month writes an empty sentinel file. 4 CPUs, 48 GB (the fold's DuckDB limit is 40 GB, `FOLD_MEMORY`), 12 h. |
-| `catchup.sbatch` | `sbatch --export=ALL,START=2026-09-19 tools/rails/catchup.sbatch` | One `s2_fetch --field created` from `START` (the day the array fetch started) to `END` (default: today) into `$SLICES/created-START_END/api/`, folded to `$SLICES/created-START_END.parquet`. Closes the gap between the array fetch (on `datetime`) and the daily refresh (on `created`, five days back); see "Run order". Same node share as one fetch task. No AWS. |
+| `catchup.sbatch` | `sbatch --export=ALL,START=2026-09-19 tools/rails/catchup.sbatch` | One `s2_fetch --field created` from `START` (the day the array fetch started) to `END` (default: today) into `$SLICES/created-START_END/api/`, folded to `$SLICES/created-START_END.parquet`. Closes the gap between the array fetch (on `datetime`) and the daily refresh (on `created`, five days back); see "Run order". Same node share as one fetch task, and it needs no AWS identity. |
 | `repair_month.sbatch` | `sbatch --export=ALL,MONTH=2019-03 tools/rails/repair_month.sbatch` | `s2_repair` from the bucket into `$SLICES/YYYY-MM/repair/`, then re-folds the month from `api/` and `repair/` together. The year must be rebuilt afterwards (the job prints how). |
-| `build_year.sbatch` | `sbatch --export=ALL,YEAR=2019 tools/rails/build_year.sbatch` | `s2_build --collection sentinel-2-c1-l2a` over the year's twelve slices, plus every `$SLICES/created-*.parquet` (the build keeps this year's rows and dedupes by id), into `$PUBLISH/sentinel-2-c1-l2a/year=YYYY/items.parquet`: sorted `(_tile, datetime)`, uniform 6,144-row groups, zstd 18, `gpio check all`. Refuses a year with a month not yet folded. 64 CPUs, 300 GB (`--memory 250GB`), 8 h. No AWS. |
+| `build_year.sbatch` | `sbatch --export=ALL,YEAR=2019 tools/rails/build_year.sbatch` | `s2_build --collection sentinel-2-c1-l2a` over the year's twelve slices, plus every `$SLICES/created-*.parquet` (the build keeps this year's rows and dedupes by id), into `$PUBLISH/sentinel-2-c1-l2a/year=YYYY/items.parquet`: sorted `(_tile, datetime)`, uniform 6,144-row groups, zstd 18, `gpio check all`. Refuses a year with a month not yet folded. 64 CPUs, 300 GB (`--memory 250 GB`), 8 h, and it needs no AWS identity. |
 | `build_ready_years.sh` | `bash tools/rails/build_ready_years.sh` | Login node. Submits `build_year.sbatch` for every year whose months are all folded, that is not built and has no `s2c1-build-YYYY` job queued; smallest first. Run it again as the fetch progresses. |
 | `upload_year.sbatch` | `sbatch --export=ALL,YEAR=2019 tools/rails/upload_year.sbatch` | `upload.py` puts the year file under the catalog prefix as `source-coop`; a HEAD first skips an object of the same size (`FORCE=1` to replace). Prints the laptop commands for the metadata. |
 | `audit_year.sbatch` | `sbatch --export=ALL,YEAR=2019 tools/rails/audit_year.sbatch` | `s2_audit` of the built year files on `/u` against the source bucket's S3 Inventory; delta table in `$PUBLISH/audit/YYYY.csv`; exit 1 when a month is off by more than `TOLERANCE`. |
-| `fold_live.sbatch` | `sbatch tools/rails/fold_live.sbatch` | The periodic duty: merges each year's published `live.parquet` into its `items.parquet`, uploads the year then an empty live, and prints the laptop commands. The printed commands regenerate each folded year's search sidecar (`items.idx.json`, `tools/make_search_sidecar.mjs`) and upload it, because the fold makes the published sidecar stale; the explorer falls back to the footer until the new one is uploaded. `YEARS` unset folds every year whose published live has rows (one HEAD and one footer read per year); `YEARS=2022,2026` names them. |
+| `fold_live.sbatch` | `sbatch tools/rails/fold_live.sbatch` | The periodic duty. It merges each year's published `live.parquet` into its `items.parquet`, then uploads the year followed by an empty live, and prints the laptop commands. The printed commands regenerate each folded year's search sidecar (`items.idx.json`, `tools/make_search_sidecar.mjs`) and upload it, because the fold makes the published sidecar stale; the explorer falls back to the footer until the new one is uploaded. `YEARS` unset folds every year whose published live has rows (one HEAD and one footer read per year); `YEARS=2022,2026` names them. |
 | `upload.py` | called by the two upload jobs | Profile-based upload with HEAD skip-existing; see its docstring for why `upload_data.py` cannot be used here. |
-| `fold_month.py`, `months.py` | called by the scripts | The month fold and the month list. The fold pins DuckDB to `FOLD_MEMORY` (40 GB) and spills to node-local `FOLD_TMP` (`/tmp/s2c1-fold-<pid>`): with the defaults, 50 array tasks died in the fold (an OOM under the 8 GB cgroup, and a spill on `/u` that could not be read back). |
+| `fold_month.py`, `months.py` | called by the scripts | The month fold and the month list. The fold pins DuckDB to `FOLD_MEMORY` (40 GB) and spills to node-local `FOLD_TMP` (`/tmp/s2c1-fold-<pid>`). With the defaults, 50 array tasks failed in the fold, hitting an OOM under the 8 GB cgroup and a spill on `/u` that could not be read back. |
 | `experiments/` | later | Layout experiments after the backfill; see its README. |
 
 Watch jobs with `squeue -u $USER`, read a log with `tail -f logs/s2c1-build-<jobid>.out`,
@@ -171,9 +180,9 @@ cancel with `scancel <jobid>`.
 ## Run order
 
 1. **Smoke.** `SMOKE=1` through fetch, build, upload and audit; then
-   check `https://data.source.coop/portolan-mirrors/sentinel-2-catalog/_smoke/sentinel-2-c1-l2a/year=2017/items.parquet`
+   check `https://data.source.coop/tge-labs/s2-stac-geoparquet/_smoke/sentinel-2-c1-l2a/year=2017/items.parquet`
    answers a HEAD. The smoke objects are not catalog data; delete them
-   from a laptop with the `portolan-mirrors` profile when done.
+   from a laptop with the `tge-labs` profile when done.
 2. **2017** (24,664 items), the first real year: `fetch_months` for its
    twelve months, `build_year`, `upload_year`, then the metadata commit
    (step 7) and a look at the year in the explorer.
@@ -186,7 +195,7 @@ cancel with `scancel <jobid>`.
    Note the day the array started: the catch-up needs it.
 5. **The catch-up**, once the array is done: `sbatch --export=ALL,START=<the
    array's start date> tools/rails/catchup.sbatch`. The array windows on
-   `datetime`, so each month holds what the API had on the day its task
+   `datetime`, so each month reflects what the API served on the day its task
    ran; the daily refresh (step 8) windows on `created` and looks back
    five days from the day the variable is set. Everything created in
    between (new acquisitions of the current month, old scenes ESA
@@ -253,14 +262,14 @@ five-day lookback fetches again, so it heals within a day.
 Then, on a laptop, the metadata commands the job prints (`make_items` and
 `make_collection` with `--remote-baseline`, the gates, a commit) and the
 `publish-catalog` workflow, which restamps every collection from the
-bucket before it uploads. The daily refresh needs nothing: its next run
-finds the emptied live and starts a new tail, disjoint from the year
-file.
+bucket before it uploads. The daily refresh needs no intervention, because
+its next run finds the emptied live and starts a new tail, disjoint from the
+year file.
 
 If the fold is skipped, nothing breaks. `live.parquet` keeps growing at
 zstd 3 (a whole year of Collection 1 in live is about 5 million rows in a
-larger, less compressed file), every query stays correct because the year
-item lists both files and the collection's glob reads both, and the year
-file lags the truth by however long the fold is late. A reprocessed scene
-sits in live with a newer `s2:generation_time` next to the archive's copy
+larger, less compressed file), every query returns the right answer because
+the year item lists both files and the collection's glob reads both, and the
+year file lags the truth by however long the fold is late. A reprocessed scene
+is in live with a newer `s2:generation_time` next to the archive's copy
 until the fold dedupes them.

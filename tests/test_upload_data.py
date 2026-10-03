@@ -264,7 +264,7 @@ with tempfile.TemporaryDirectory() as tmp:
 # configure-aws-credentials puts an assumed OIDC role in the environment;
 # building the session from catalog.publish.yaml's named profile instead
 # fails outright on a runner where that profile does not exist ("The config
-# profile (portolan-mirrors) could not be found"). aws_session must ignore
+# profile (tge-labs) could not be found"). aws_session must ignore
 # the configured profile whenever AWS_ACCESS_KEY_ID is set. Constructing a
 # boto3.Session makes no network call and needs no real secret, so this
 # stays within the "no network, no AWS, no credentials" rule above.

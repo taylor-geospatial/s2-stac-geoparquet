@@ -71,7 +71,8 @@ Rulings, settled — implement these rather than re-deciding:
 - `CI_LIGHT=1 python3 tests/run_all.py`, `CI_LIGHT=1 python3 -m pytest tests -q`,
   `python3 -m pyflakes tools tests`, YAML parse and `bash -n` on every run
   block you touch, `node --check` on the app modules.
-- Do not run anything on RAILS and do not write to any published bucket path.
+- Leave RAILS alone, and confine every write to paths outside the published
+  bucket prefix.
 
 ## Constraints
 

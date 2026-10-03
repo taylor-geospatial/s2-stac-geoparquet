@@ -4,9 +4,9 @@
   "stac_extensions": [
     "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"
   ],
-  "id": "sentinel-2-catalog",
+  "id": "s2-stac-geoparquet",
   "title": "Sentinel-2 L2A STAC-GeoParquet Mirror",
-  "description": "Item indexes for the AWS Earth Search Sentinel-2 L2A archives, published as partitioned STAC-GeoParquet plus MGRS-tile aggregate stats, with no STAC API in front: clients query the Parquet files directly over HTTP. The primary pair, `sentinel-2-c1-l2a` with `stats-c1`, mirrors Earth Search's Sentinel-2 Collection 1 index (ESA's uniform reprocessing of the archive; 30.4 million items, October 2015 onward, when counted on 2026-09-22). A second pair, `sentinel-2-l2a` with `stats`, mirrors Earth Search's original index (51.25 million items when counted on 2026-09-15; its record starts in November 2016 and is partial before December 2018, which is what Earth Search serves). The imagery stays on AWS; every Cloud-Optimized GeoTIFF URL is carried verbatim in each item's `assets` column. This is a mirror; Earth Search / Element 84 produces the item indexes this catalog republishes. Read the [agent guide](AGENTS.md) before you query it.",
+  "description": "Item indexes for the AWS Earth Search Sentinel-2 L2A archives, as partitioned STAC-GeoParquet with MGRS-tile aggregates beside them. No STAC API sits in front, so a client queries the Parquet over HTTP range reads.\n\nStart with `sentinel-2-c1-l2a` and `stats-c1`, which mirror Earth Search's Sentinel-2 Collection 1 index, ESA's uniform reprocessing of the archive. That pair held 30.4 million items from October 2015 onward when counted on 2026-09-22. The second pair, `sentinel-2-l2a` with `stats`, mirrors Earth Search's original index, counted at 51.25 million items on 2026-09-15. Its record begins in November 2016 and is partial before December 2018, which is what Earth Search serves rather than a gap introduced here.\n\nThe imagery stays on AWS, and each item's `assets` column carries every Cloud-Optimized GeoTIFF URL verbatim. This catalog is a mirror. Earth Search, run by Element 84, produces the item indexes it republishes, and nothing here is filtered, reclassified or interpolated. Read the [agent guide](AGENTS.md) before you query.",
   "updated": "2026-09-22T05:57:11Z",
   "links": [
     {
@@ -38,6 +38,24 @@
       "href": "./stats-c1/collection.json",
       "type": "application/json",
       "title": "MGRS coverage and cloud statistics (Collection 1)"
+    },
+    {
+      "rel": "preview",
+      "href": "https://research.taylorgeospatial.org/s2-stac-geoparquet/",
+      "type": "text/html",
+      "title": "Interactive scene explorer"
+    },
+    {
+      "rel": "via",
+      "href": "https://source.coop/tge-labs/s2-stac-geoparquet",
+      "type": "text/html",
+      "title": "This catalog on Source Cooperative"
+    },
+    {
+      "rel": "via",
+      "href": "https://element84.com/earth-search/",
+      "type": "text/html",
+      "title": "Earth Search by Element 84 (upstream source)"
     },
     {
       "rel": "describedby",

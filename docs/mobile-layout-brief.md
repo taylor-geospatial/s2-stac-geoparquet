@@ -2,8 +2,9 @@
 
 ## The complaint
 
-On a phone the explorer shows almost no map. The sidebar takes 46 vh at the
-top, the image panel takes up to 45 vh at the bottom, and the map is the
+On a phone the explorer shows almost no map. The sidebar occupies 46 vh at
+the top, with the image panel below it at up to 45 vh. That leaves the map as
+the
 9 vh strip between them. The user's words: "Can we get the mobile experience
 a bit better? Too much menus so that I can't see the map."
 
@@ -17,8 +18,8 @@ viewport and **one** bottom sheet holds everything else. Desktop is unchanged:
 sidebar left, image card at the map's lower right.
 
 - `#map` covers the whole viewport.
-- `#panel` becomes the sheet: fixed to the bottom, full width, rounded top,
-  with a grab handle. Three snap heights:
+- `#panel` becomes the sheet, fixed to the bottom at full width, with a
+  rounded top and a grab handle. Its snap heights:
   - **peek**: handle plus one line of status, about 110 px. The default when a
     scene is drawn on the map.
   - **half**: 50 dvh. The default on load.
@@ -26,10 +27,11 @@ sidebar left, image card at the map's lower right.
 - `#imgpanel` is not a second sheet on mobile. When a scene is shown, its
   contents (the "Showing … Clear" bar and "Bands & stretch") render at the top
   of the same sheet, above the search controls. One sheet, never two.
-- The handle responds to both: a drag (pointer events, snapping to the nearest
-  stop on release) and a tap (cycles peek → half → full → peek).
+- The handle responds to a drag, through pointer events that snap to the
+  nearest stop on release, and to a tap, which cycles peek → half → full →
+  peek.
 - Showing a scene on the map snaps the sheet to peek, so the user sees the
-  image they just asked for. The "Showing …" line stays visible at peek.
+  image they just asked for. The "Showing …" line remains visible at peek.
 - The sheet's content scrolls inside it; the page itself never scrolls.
 - Respect the phone: `dvh` units (the iOS URL bar changes `vh`), and
   `env(safe-area-inset-bottom)` padding so the home indicator does not sit on
@@ -58,4 +60,4 @@ before/after pair at 428x926 matters most — the user will look at it.
 on their text. No new dependencies. Simplified Technical English in lasting
 comments and the commit body. Gates: `node --check` on the modules,
 `CI_LIGHT=1 python3 tests/run_all.py`, `CI_LIGHT=1 python3 -m pytest tests -q`.
-One commit, explicit paths. Do not push.
+Make one commit with explicit paths, and do not push.

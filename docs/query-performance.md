@@ -1,7 +1,7 @@
 # Query performance across the three published part layouts
 
 Measured 2026-09-19 against the live bucket
-(`https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/`)
+(`https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/`)
 with DuckDB 1.5.3 (Python, `httpfs` + `spatial`), one fresh connection per
 measurement so nothing is cached. The question: should the 2016–2025 parts be
 rebuilt to the 2026 layout (6k-row groups, sorted `(_month, s2:mgrs_tile, _hilbert)`)?
@@ -58,7 +58,7 @@ re-run on the same connection.
 | | V3-2026 | 7.1 (4.7–19.0) | 46 | 2.3 | 0.5 |
 
 GET and MiB are deterministic per (vintage, tile, query) and repeat exactly
-across runs (the per-tile spread for V2 — e.g. 60/88/109 GETs for the
+across runs (the per-tile spread for V2 — such as 60/88/109 GETs for the
 3-month query — is the Hilbert scatter, see below). Wall time is not: see
 "Network conditions".
 
@@ -75,11 +75,10 @@ Laptop, Copenhagen; the bucket is served through Cloudflare (edge `CPH`,
 Over the 225 default runs the wall-time median was 11.2 s, p10 5.8 s, p90
 33.4 s, max 125.8 s (a 4-GET / 14 MB query that retried once). The ledger's
 earlier numbers (5.0 s V1 vs 6.8 s V2 for the 3-month query) were taken on a
-faster path; today's per-request latency is about 3× worse, which is why
-every vintage lands at 6–15 s and the wall-time columns mostly cannot
-separate vintages. The request and byte counts can, and they are what a
-layout change controls. No ZSTD-decompression flake was seen: all 225 runs
-returned rows.
+faster path; today's per-request latency is about 3× worse, so each vintage
+measures 6–15 s and the wall-time columns mostly cannot separate vintages. The request and byte counts can, and they are what a
+layout change controls. All 225 runs returned rows, with no
+ZSTD-decompression flake.
 
 ## Mechanism: what parquet_metadata says each layout admits
 
@@ -97,7 +96,7 @@ GET per admitted group) before reading the rest.
 | V2-2025 | 143 | 1073 | 1.68 | 0.80 | 0.20 | 16 | 5–10 | 13–26 | 39–93 | 3 |
 | V3-2026 | 109 | 813 | 1.67 | 0.78 | 0.21 | 16 | 3 | 6–7 | 14–17 | 4 |
 
-Ranges are across the three tiles. What this shows:
+Ranges are across the three tiles. Reading the table:
 
 - **V1 admits every group of the month** (a tile-month = 3 groups in a 4-part
   year, 1 in an 8-part year) and each group is 2.9 MB for the app's six
@@ -112,7 +111,7 @@ Ranges are across the three tiles. What this shows:
   Row groups are cut every 6,144 rows regardless of `_month`, so the group
   straddling months 4→5 and the one straddling 5→6 each span the whole tile
   range (`21DXJ…31XFL`) and are admitted by stats, then excluded by their
-  bloom filter. Hence 3 admitted (1 real) per tile-month, 6–7 per 3-month
+  bloom filter. So 3 are admitted (1 real) per tile-month, 6–7 per 3-month
   window, 14–17 per partial year. Aligning row-group boundaries to `_month`
   in the build would cut this to 1 per tile-month and remove roughly a third
   of V3's remaining requests.
@@ -126,8 +125,8 @@ Ranges are across the three tiles. What this shows:
   read all 16 May groups (3.8 MB) though `geo_bbox` stats admit only 4. The
   `bbox` list column and `ST_XMin/XMax` bounds prune no better. So today the
   bbox query is bounded by the month filter only, and Hilbert order inside a
-  month buys nothing for it. The V2→V3 sort change therefore cannot hurt it,
-  and the measurement agrees (V2 32–39 GET / 4.0 MiB vs V3 39 GET / 3.8 MiB).
+  month buys nothing for it. The V2→V3 sort change cannot hurt it, and the
+  measurement agrees (V2 32–39 GET / 4.0 MiB vs V3 39 GET / 3.8 MiB).
 
 ## Answers
 
@@ -140,8 +139,9 @@ in wall time on today's path, only clearly for the full-year history.
 | full-year history | GET 92 → 46 (**−50%**), MiB 24.6 → 2.3 (**−91%**), wall 22.2 → 7.1 s (**−68%**) | GET 46 → 46, MiB 15.3 → 2.3 (−85%), wall 12.8 → 7.1 s (−45%) | GET 118–129 → 46 (**−61–64%**), MiB 2.9–3.0 → 2.3, wall 9.6–11.5 → 7.1 s |
 | assets by id | GET 10 → 37, MiB 13.3 → 1.9 (−86%), wall 8.4 → 6.8 s | GET 4 → 37, MiB 14.0 → 1.9, wall 14.0 → 6.8 s | GET 25–29 → 37, MiB same, wall same |
 
-Why the 3-month query's wall time does not move: on a 0.8 s-per-request path
-the cost is the *depth* of sequential requests, not their count or size.
+On a 0.8 s-per-request path the cost is the *depth* of sequential requests
+rather than their count or size. That is what holds the 3-month query's wall
+time still.
 Every vintage does HEAD → footer → (filter columns + bloom filter per admitted
 group, groups in parallel) → (remaining columns for the matched groups, a
 second pass because `LIMIT 30` triggers DuckDB's late materialization). That
@@ -153,32 +153,32 @@ where V1's 24.6 MB stops hiding behind latency.
 GET / 3.9–4.0 MiB / 7.5–13.8 s — the same groups are read, because DuckDB
 does not prune on geometry statistics (above). If a future DuckDB does, V3's
 month-boundary groups still carry Hilbert order within each tile, and a 0.5°
-box inside one tile lands in one tile's run of rows; expect it to admit about
+box inside one tile falls inside one tile's run of rows; expect it to admit about
 the same groups as V2 (4 vs 3 for May by `geo_bbox`).
 
-**Quick wins measured (no rebuild), 3-month query, one cold run per tile:**
+**Measured without a rebuild, 3-month query, one cold run per tile:**
 
 | change | V1-2020 | V2-2024 | V3-2026 | verdict |
 |---|---|---|---|---|
 | `SET late_materialization_max_rows = 0` (single scan pass) | 42–44 GET, 6.5–6.9 MiB | 57–106 GET, 1.6 MiB | 34–37 GET, 1.4 MiB | −3 GET, −10% bytes; wall unchanged within noise |
 | project 3 columns (`id, datetime, eo:cloud_cover`) instead of 6 | 35–38 GET, 3.4–3.8 MiB | 54–103 GET, 1.4 MiB | 31–34 GET, 1.2 MiB | −6 GET; halves V1 bytes; wall unchanged within noise |
 | `SET httpfs_connection_caching = true` | 41–44 GET, 7.4–7.8 MiB | 60–109 GET, 1.6–1.7 MiB | 37–40 GET, 1.4 MiB | identical requests and bytes; wall unchanged within noise |
-| add `s2:mgrs_tile` to the assets-by-id fetch | 10 → 28 GET | 29 → 73 GET | 37 → 25 GET | worse on V1/V2 (each admitted group costs a bloom read); keep the app's current shape until V1/V2 are rebuilt |
+| add `s2:mgrs_tile` to the assets-by-id fetch | 10 → 28 GET | 29 → 73 GET | 37 → 25 GET | worse on V1/V2 (each admitted group costs a bloom read); leave the app's current shape alone until V1/V2 are rebuilt |
 
-Nothing here is worth a code change today. Two things not measured but
-implied by the numbers: (1) DuckDB 1.5's in-memory external file cache makes
+Nothing here is worth a code change today. The numbers imply two further
+effects that were not measured. (1) DuckDB 1.5's in-memory external file cache makes
 a repeat query on the same connection 0.3–1.2 s with zero GETs, so a
 long-lived connection is the only cheap speed-up there is (the explorer
 keeps one; whether DuckDB-wasm caches the same way was not measured); (2) the two footer reads and the bloom-filter read per
-group are ~1 s each on this path, which is why a query that touches one
-6k-row group still takes 5 s cold.
+group are ~1 s each on this path, so a query that touches one 6k-row group
+still takes 5 s cold.
 
 ## Recommendation
 
 Rebuild V1 (2016–2023) and V2 (2024–2025) to the V3 layout, with one build
 change: cut row groups on `_month` boundaries so a tile-month admits one
-group. The gain is real but it is a bytes-and-requests gain, not a
-wall-clock one on a high-latency path: full-year tile history 2–3× faster and
+group. The gain is real, and it shows up in bytes and requests rather than in
+wall clock on a high-latency path: full-year tile history 2–3× faster and
 10× fewer bytes against 2019–2020; the 3-month app query goes from 5–8 MB to
 1.4 MB per click with the same request count; V2's request count halves. The
 years that benefit most are 2018–2020 (single-file and 4-part years with the
@@ -188,7 +188,7 @@ from 2020 on, so its geometry column alone is 2.2 GB in `2019/z21-35`, and
 of V1.
 
 **Rebuild cost** (single-threaded `gpio sort column` at zstd-18: 50–95 min per
-1.3–2.4M-row part, and 2021's eight 1.08M-row octants at ~94 min each — i.e.
+1.3–2.4M-row part, and 2021's eight 1.08M-row octants at ~94 min each — that is,
 roughly 40–90 min per million rows):
 
 | range | rows | today's parts | runner-hours at 40–90 min/M rows |
@@ -216,7 +216,7 @@ free GitHub runners.
 
 ```python
 import duckdb, re, time
-B = "https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a"
+B = "https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a"
 APP = 'id, datetime, "eo:cloud_cover", thumbnail_url, "s2:mgrs_tile", "s2:nodata_pixel_percentage"'
 f, t = f"{B}/year=2026/z21-31.parquet", "31UFU"
 queries = {
@@ -240,5 +240,5 @@ id is the first May scene of the tile (`ORDER BY datetime LIMIT 1`). The
 admit counts come from `parquet_metadata(f)`: intersect the `row_group_id`s
 whose `_month` `stats_min/max` bracket the month with those whose
 `s2:mgrs_tile` `stats_min/max` bracket the tile; `geo_bbox` on the `geometry`
-row gives the spatial equivalent. Three repetitions per cell, median
-reported; every cold run was a new `duckdb.connect()`.
+row gives the spatial equivalent. Each cell is the median of three
+repetitions, and every cold run used a new `duckdb.connect()`.

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sentinel-2 Explorer — Taylor Geospatial Institute</title>
+<title>Sentinel-2 Explorer — Taylor Geospatial</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <!-- Two faces for the chrome. Space Grotesk takes the headings: the
      institute sets its own in Gintronic, which is licensed per domain, and
@@ -93,13 +93,13 @@
   </details>
 </div>
 <aside id="panel">
-  <!-- The institute's wordmark above the product title: the page is a
-       Taylor Geospatial Institute demonstrator, and the name links out to
-       the institute. The mark is one <symbol> at the foot of this file,
-       drawn in currentColor so it takes the panel's ink. -->
+  <!-- The wordmark above the product title: the page is a Taylor
+       Geospatial demonstrator, and the name links out. The mark is one
+       <symbol> at the foot of this file, drawn in currentColor so it takes
+       the panel's ink. -->
   <a class="brand" href="https://taylorgeospatial.org/" target="_blank" rel="noopener">
     <svg class="brand-mark" viewBox="0 0 753.1 81.1" role="img"
-      aria-label="Taylor Geospatial Institute"><use href="#tg-wordmark"></use></svg>
+      aria-label="Taylor Geospatial"><use href="#tg-wordmark"></use></svg>
   </a>
   <!-- The header names the loaded collection; app.js fills the select from
        its COLLECTIONS table, reads ?collection= and reloads on a change. -->
@@ -198,10 +198,10 @@
   <details id="apibox"><summary>The "API request" this answered</summary>
     <pre id="api"></pre><pre id="sql"></pre></details>
   <footer class="foot">Static GeoParquet + PMTiles on
-    <a href="https://source.coop/portolan-mirrors/sentinel-2-catalog">Source Cooperative</a>.
+    <a href="https://source.coop/tge-labs/s2-stac-geoparquet">Source Cooperative</a>.
     No server, no API, no database.<br>
-    Built at the <a href="https://taylorgeospatial.org/"
-      target="_blank" rel="noopener">Taylor Geospatial Institute</a>.</footer>
+    Built at <a href="https://taylorgeospatial.org/"
+      target="_blank" rel="noopener">Taylor Geospatial</a>.</footer>
 </aside>
   </div>
 </div>
@@ -256,7 +256,7 @@
 <dialog id="welcome" aria-labelledby="welcome-title">
   <button id="welcome-x" class="mini x" type="button" aria-label="Close">✕</button>
   <svg class="brand-mark" viewBox="0 0 753.1 81.1" role="img"
-    aria-label="Taylor Geospatial Institute"><use href="#tg-wordmark"></use></svg>
+    aria-label="Taylor Geospatial"><use href="#tg-wordmark"></use></svg>
   <h2 id="welcome-title">Sentinel-2 Explorer</h2>
   <p>Find and view Sentinel-2 L2A scenes anywhere on Earth. Nothing on this
      page calls an API. Every search is an HTTP range read against static

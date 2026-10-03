@@ -351,7 +351,7 @@ def main() -> None:
     from ground_truth import truth
     con = duckdb.connect(config={"memory_limit": "8GB"})
     con.execute("INSTALL httpfs; LOAD httpfs;")
-    BUCKET = "https://data.source.coop/portolan-mirrors/sentinel-2-catalog"
+    BUCKET = "https://data.source.coop/tge-labs/s2-stac-geoparquet"
 
     def part_of(collection: str, year: str) -> tuple[str, str]:
         """The one part the app reads for that (collection, year), and its tile

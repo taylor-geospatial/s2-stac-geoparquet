@@ -16,7 +16,7 @@ def test_schema_shape():
     assert ("_hilbert", "UINTEGER") == COLUMNS[-2][:2]
     assert ("_month", "TINYINT") == COLUMNS[-3][:2]
     assert COLUMNS[-4][0] == "assets"
-    assert USER_AGENT.startswith("sentinel-2-catalog-tools/")
+    assert USER_AGENT.startswith("s2-stac-geoparquet-tools/")
 
 
 def test_live_assets_resolve():
