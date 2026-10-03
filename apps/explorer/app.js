@@ -83,16 +83,19 @@ export const BASE = new URLSearchParams(location.search).get("base")
 // for a tile
 // (apiMirror): Collection 1 items have no s2:mgrs_tile, their tile is
 // grid:code "MGRS-31UET". `masks` are the extra single bands its scenes
-// carry (bands.js MASK_BANDS). `since` is the first year with scenes. It
-// sets the sub-header text. It also sets the year select's fallback range
-// when the stats are missing.
+// carry (bands.js MASK_BANDS). `firstDate` is the day of the collection's
+// oldest scene, read from the start of the temporal extent its
+// collection.json publishes. No window on this page reaches before it.
+// `since`, its year, is derived from it below: it sets the sub-header text,
+// and it sets the year select's fallback range when the stats are missing.
 // DEFAULT_COLLECTION is what loads without ?collection=. Collection 1 is
 // the default since 2026-09-22, when its backfill and stats were published;
 // ?collection=sentinel-2-l2a opens the first collection.
 export const DEFAULT_COLLECTION = "sentinel-2-c1-l2a";
 export const COLLECTIONS = {
   "sentinel-2-l2a": {
-    label: "Sentinel-2 L2A (Earth Search)", title: "Sentinel-2 L2A", since: 2016,
+    label: "Sentinel-2 L2A (Earth Search)", title: "Sentinel-2 L2A",
+    firstDate: "2016-11-01",
     dir: "sentinel-2-l2a", statsDir: "stats", tileColumn: "s2:mgrs_tile",
     // No part of this collection has ever had a sidecar: only Collection 1's
     // items.parquet gets one (tools/rails/fold_live.sbatch). Saying so saves
@@ -107,7 +110,7 @@ export const COLLECTIONS = {
   },
   "sentinel-2-c1-l2a": {
     label: "Sentinel-2 Collection 1 (Earth Search)", title: "Sentinel-2 Collection 1 L2A",
-    since: 2015,
+    firstDate: "2015-10-22",
     dir: "sentinel-2-c1-l2a", statsDir: "stats-c1", tileColumn: "_tile",
     // items.parquet publishes one; a live part does not, and pays the probe.
     sidecars: true,
@@ -119,6 +122,7 @@ export const COLLECTIONS = {
     masks: Object.keys(MASK_BANDS),
   },
 };
+for (const c of Object.values(COLLECTIONS)) c.since = Number(c.firstDate.slice(0, 4));
 const requestedCollection = new URLSearchParams(location.search).get("collection");
 export const COLLECTION_ID = COLLECTIONS[requestedCollection] ? requestedCollection : DEFAULT_COLLECTION;
 const COL = COLLECTIONS[COLLECTION_ID];
@@ -355,6 +359,10 @@ let wireTip = () => {};
   const KEY = "s2-explorer.welcomed";
   const dlg = $("welcome");
   $("about").addEventListener("click", () => dlg.showModal());
+  // The ✕ in the dialog's corner. Escape and the "Start exploring" submit
+  // already close it; this is the third way, for a pointer that never
+  // reaches the keyboard or the foot of the box.
+  $("welcome-x").addEventListener("click", () => dlg.close());
   dlg.addEventListener("close", () => {
     try { localStorage.setItem(KEY, "1"); } catch { /* no storage: ask again next time */ }
   });
@@ -708,7 +716,7 @@ function hashOfState() {
   const c = map.getCenter();
   put("map", `${map.getZoom().toFixed(2)}/${c.lat.toFixed(4)}/${c.lng.toFixed(4)}`);
   if (S.year !== null) put("year", S.year);
-  if (S.from && S.to && !(S.from === `${S.year}-01-01` && S.to === `${S.year}-12-31`)) {
+  if (S.from && S.to && !(S.from === yearStart(S.year) && S.to === yearEnd(S.year))) {
     put("d", `${S.from}..${S.to}`);
   }
   if (S.maxCloud !== 100) put("cloud", S.maxCloud);
@@ -1257,6 +1265,30 @@ function lastDayOfMonth(ym) {
   return new Date(Date.UTC(yy, mm, 0)).toISOString().slice(0, 10);
 }
 
+// A day, held to the days a scene can fall on. The collection's first scene
+// bounds the oldest year and today bounds the newest: before COL.firstDate
+// and after TODAY there is nothing to find, so no handle and no calendar
+// may travel there. ISO day strings compare as dates, so two comparisons
+// are the whole clamp.
+const clampDay = (day) => (day < COL.firstDate ? COL.firstDate
+  : day > TODAY ? TODAY : day);
+// A whole window, clamped. Every caller passes a span it has already built —
+// a year, a locked month, one month wider — and takes back the part of it
+// that can hold scenes. buildDateSlider puts the pair on the slider, and
+// dayRange writes it onto the From/To calendars as their min and max, so
+// the calendars refuse the same days the handles cannot reach.
+// A span wholly outside those days clamps to one end of them, and both ends
+// land on the same day rather than crossing: the slider keeps a start before
+// its end whatever it is handed.
+function clampWindow(from0, to0) {
+  const from = clampDay(from0), to = clampDay(to0);
+  return from > to ? [from, from] : [from, to];
+}
+// The searchable span of one year: 2016 opens on November, and the current
+// year ends today, not on December 31.
+const yearStart = (year) => clampDay(`${year}-01-01`);
+const yearEnd = (year) => clampWindow(`${year}-01-01`, `${year}-12-31`)[1];
+
 // Create the two-handle day slider or move its bounds. onChange fires on
 // every handle drag step and calendar edit, and drives the map paint and
 // the card filter through one apply.
@@ -1294,7 +1326,7 @@ function setYear(year) {
   S.monthLock = null;
   $("datelock").hidden = true;
   $("year").value = String(year);
-  setWindow(`${year}-01-01`, `${year}-12-31`);
+  setWindow(yearStart(year), yearEnd(year));
   if (S.tile && S.search) startSearch(S.tile, year);
 }
 
@@ -1304,13 +1336,13 @@ function lockToMonth(ym) {
   S.monthLock = ym;
   $("datelock").hidden = false;
   $("datelock-label").textContent = ym;
-  setWindow(`${ym}-01`, lastDayOfMonth(ym));
+  setWindow(...clampWindow(`${ym}-01`, lastDayOfMonth(ym)));
   if (S.tile) startSearch(S.tile, Number(ym.slice(0, 4)));
 }
 function unlockMonth() {
   S.monthLock = null;
   $("datelock").hidden = true;
-  setWindow(`${S.year}-01-01`, `${S.year}-12-31`);
+  setWindow(yearStart(S.year), yearEnd(S.year));
 }
 $("datereset").addEventListener("click", unlockMonth);
 
@@ -1326,20 +1358,24 @@ function monthYearLabel(isoDay) {
 }
 
 // The window one month wider than S.from/S.to, or null when it already
-// spans the whole year. The start gives way first, one month at a time,
-// down to the year's first day; only once it is pinned there does the end
-// start moving. Both ends stay inside S.year — lastDayOfMonth resolves a
-// "YYYY-MM" string to that month's own last day.
+// spans the year's whole searchable part. The start gives way first, one
+// month at a time, down to the year's first searchable day; only once it is
+// pinned there does the end start moving. Both ends stay inside S.year —
+// lastDayOfMonth resolves a "YYYY-MM" string to that month's own last day,
+// and yearStart/yearEnd hold the pair to the days that can carry scenes, so
+// the button stops offering a month once the window has reached them.
 function widerWindow() {
-  const first = `${S.year}-01-01`, last = `${S.year}-12-31`;
+  const first = yearStart(S.year), last = yearEnd(S.year);
   if (S.from > first) {
     const m = Number(S.from.slice(5, 7));
-    const from = m === 1 ? first : `${S.year}-${String(m - 1).padStart(2, "0")}-01`;
+    const from = m === 1 ? first
+      : clampDay(`${S.year}-${String(m - 1).padStart(2, "0")}-01`);
     return { from, to: S.to };
   }
   if (S.to < last) {
     const m = Number(S.to.slice(5, 7));
-    const to = m === 12 ? last : lastDayOfMonth(`${S.year}-${String(m + 1).padStart(2, "0")}`);
+    const to = m === 12 ? last
+      : clampDay(lastDayOfMonth(`${S.year}-${String(m + 1).padStart(2, "0")}`));
     return { from: S.from, to };
   }
   return null;
@@ -1449,7 +1485,7 @@ function restoreControls(defaultYear) {
   $("maxcloud-out").textContent = $("maxcloud").value;
   $("mincoverage-out").textContent = $("mincoverage").value;
   $("minscenes-out").textContent = $("minscenes").value;
-  buildDateSlider(`${year}-01-01`, `${year}-12-31`);
+  buildDateSlider(yearStart(year), yearEnd(year));
   // A window inside the restored year only. set() clamps to the slider's
   // bounds and writes the clamped days back, and its onChange is what puts
   // them in S; the two reads below just say so out loud.
@@ -3325,7 +3361,13 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   const view = currentView();
   if (view.length) {
     showIndex(0, flyFirst);
-    if (snap !== "peek") box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    // Land on the top of Find scenes, not on the top of the results. The
+    // first thing a user does with a tile's scenes is narrow them, so the
+    // dates and the three sliders have to be on screen with the list under
+    // them. showIndex has just scrolled its own card into view; this runs
+    // after it, so it is the scroll that settles. Not in peek, where the
+    // sheet is collapsed and there is nothing to scroll.
+    if (snap !== "peek") $("query").scrollIntoView({ block: "start", behavior: "smooth" });
   }
   // Fire-and-forget: warms the scrub stack outward from the shown scene.
   // Its own seq guard makes this safe to leave unawaited.

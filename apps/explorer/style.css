@@ -1,10 +1,19 @@
+/* The palette is the Taylor Geospatial Institute's, in its dark form: the
+   institute's research pages carry the same brown-black surfaces, ivory ink
+   and coral mark (research.taylorgeospatial.org). --accent is the
+   institute's periwinkle, which the page uses the way it used its old blue
+   — links, slider fills, the scrub track — so every rule below that reads
+   var(--accent) keeps its meaning. --brand is the coral, reserved for the
+   wordmark rule and the one primary button, so it never competes with the
+   amber a filtered-out scene is drawn in. */
 :root {
-  --panel: #0e1526;
-  --panel-2: #141d33;
-  --ink: #e6ecf7;
-  --dim: #93a2c0;
-  --line: #24304d;
-  --accent: #6ea8ff;
+  --panel: #1b1512;
+  --panel-2: #241d19;
+  --ink: #f2ede2;
+  --dim: #a39a8e;
+  --line: #3a302a;
+  --accent: #809fd6;
+  --brand: #ff4f2c;
   /* The scrub track's two loaded tones: one hue, two strengths, so the read
      is still coverage and not a new colour. --scrub-loaded (Task 23) is the
      subdued mix for a position whose thumbnail warp is ready; --scrub-hd
@@ -18,6 +27,13 @@
      stretch histogram — must inset by half this value on each side. One
      source of truth for both keeps the two from drifting apart. */
   --thumb: 14px;
+  /* Space Grotesk for the headings, JetBrains Mono for the figures and the
+     ids. Both are named with a full system fallback stack, so a blocked font
+     request costs the page nothing but the voice. --ui stays the system
+     face: the panel is dense, and nothing in it reads better in a webfont. */
+  --display: "Space Grotesk", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -26,8 +42,8 @@
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
 body {
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  background: #0b1020;
+  font: 14px/1.45 var(--ui);
+  background: #17120f;
   color: var(--ink);
 }
 #map { position: absolute; inset: 0 0 0 360px; }
@@ -41,12 +57,25 @@ body {
   overflow-y: auto; padding: 14px 18px 28px;
   background: var(--panel); border-right: 1px solid var(--line);
 }
-h1 { margin: 0; font-size: 18px; letter-spacing: .2px; }
+/* The institute's wordmark, over a coral rule: the page's one piece of
+   brand furniture, above the product title it belongs to. The <svg> is
+   sized by width alone — its viewBox keeps the aspect — and takes its
+   colour from the panel's ink, so the one <symbol> serves here and in the
+   welcome without a second copy. */
+.brand { display: block; margin: 0 0 10px; padding: 0 0 9px;
+         border-bottom: 2px solid var(--brand); line-height: 0; }
+.brand-mark { display: block; width: 170px; max-width: 100%; height: auto;
+              color: var(--ink); }
+.brand:hover .brand-mark { color: var(--brand); }
+/* The headings carry the institute's voice; everything else stays on the
+   system face. They are set tight and small — the panel is 360px wide, and
+   a heading that grows takes a control row with it. */
+h1 { margin: 0; font: 700 18px/1.2 var(--display); letter-spacing: -.02em; }
 /* The title and the About button share one row. */
 .head { display: flex; align-items: center; justify-content: space-between;
         gap: 8px; margin: 0 0 8px; }
-h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
-     letter-spacing: .09em; color: var(--dim); }
+h2 { margin: 0 0 8px; font: 500 12px/1.3 var(--display); text-transform: uppercase;
+     letter-spacing: .1em; color: var(--dim); }
 .sub { margin: 0 0 10px; color: var(--dim); font-size: 12px; }
 /* The collection switch sits between the title and its one-line blurb, its
    label and select on one row. */
@@ -61,6 +90,11 @@ h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
 .selrow { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
 .selrow .lbl { flex: 0 0 3.4em; color: var(--dim); font-size: 12px; }
 .selrow b, .selrow a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The ids — the tile, the scene on the map, the scene on a card — are the
+   one place a fixed advance earns its keep: they are read character by
+   character, and they stack into columns. Set a notch below the body size,
+   because the mono face runs wide. */
+.selrow b, #sel-scene, #cog-id, .scene b { font: 500 11.5px/1.4 var(--mono); }
 #sel-scene { color: var(--accent); text-decoration: none; }
 #sel-scene:hover { text-decoration: underline; }
 #sel-scene::after { content: " ↗"; font-size: 11px; }
@@ -115,7 +149,7 @@ h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase;
 .filter { display: grid; grid-template-columns: minmax(8.5em, max-content) 1fr 4ch;
   align-items: center; gap: 6px; margin: 4px 0; }
 .filter label { white-space: nowrap; }
-.filter output { text-align: right; font-variant-numeric: tabular-nums; }
+.filter output { text-align: right; font: 500 12px/1 var(--mono); }
 /* The grid's middle track is already the slider's share of the row, so the
    base 74% only left a quarter of it empty before the value column. Filling
    the track is the whole point of giving it one. */
@@ -195,7 +229,7 @@ input[type=range] { width: 74%; vertical-align: middle; padding: 0; border: 0;
    while a bar click has clamped the slider to one month. */
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
-  background: var(--panel-2, #223); border: 1px solid var(--line, #3a4666);
+  background: var(--panel-2); border: 1px solid var(--line);
   border-radius: 10px; padding: 1px 6px; font-size: 12px; color: var(--dim);
   margin: 2px 0;
 }
@@ -235,8 +269,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
                  color: var(--dim); font-size: 11px; margin-top: 3px; }
 
 #timeline { padding: 10px 0; border-top: 1px solid var(--line); }
-#timeline summary { cursor: pointer; font-size: 12px; text-transform: uppercase;
-                    letter-spacing: .09em; color: var(--dim); font-weight: 700; }
+#timeline summary { cursor: pointer; font: 500 12px/1.3 var(--display);
+                    text-transform: uppercase; letter-spacing: .1em; color: var(--dim); }
 #timeline[open] summary { margin-bottom: 8px; }
 #bars {
   display: flex; align-items: flex-end; justify-content: flex-start; gap: 1px;
@@ -293,9 +327,9 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .scene .actions svg { width: 16px; height: 16px; display: block; }
 .scene .links { display: inline-block; margin-top: 4px; }
 button.mini {
-  padding: 2px 8px; font-size: 11.5px; background: #1d365e; border-color: #2b4c86;
+  padding: 2px 8px; font-size: 11.5px; background: #342a24; border-color: #4a3c33;
 }
-button.mini:not(:disabled):hover { background: #26457a; }
+button.mini:not(:disabled):hover { background: #43362e; }
 /* The image controls (Task 29): a card floating at the map's lower right,
    well under the zoom column at the top right; it scrolls on its own past
    70 vh. No source carries attribution, so MapLibre's compact attribution
@@ -323,7 +357,7 @@ button.mini:not(:disabled):hover { background: #26457a; }
   background: #1a9850;
 }
 #cog-state[data-state="loading"]::before {
-  background: none; border: 2px solid #2b4c86; border-top-color: #9ecae1;
+  background: none; border: 2px solid #4a3c33; border-top-color: var(--accent);
   animation: cog-spin .8s linear infinite;
 }
 #cog-state[data-state="partial"]::before { background: #f4a261; }
@@ -349,8 +383,9 @@ button.mini:not(:disabled):hover { background: #26457a; }
   margin: 8px 0 0; padding: 6px 10px 8px; font-size: 12px; border-radius: 3px;
   background: var(--panel-2); border-left: 3px solid #1a9850;
 }
-#bandbox summary { cursor: pointer; color: var(--dim); font-size: 12px;
-                   text-transform: uppercase; letter-spacing: .09em; }
+#bandbox summary { cursor: pointer; color: var(--dim);
+                   font: 500 12px/1.3 var(--display);
+                   text-transform: uppercase; letter-spacing: .1em; }
 #bandbox label { margin: 6px 0 0; }
 #bandbox select { margin-top: 2px; }
 #bandbox .bandrow.three { display: flex; gap: 6px; }
@@ -383,7 +418,7 @@ button.mini:not(:disabled):hover { background: #26457a; }
    first bin. */
 .chan canvas.hist { display: block; width: calc(100% - var(--thumb)); height: 36px;
                     margin: 4px calc(var(--thumb) / 2) 0;
-                    background: #0b1020; border-radius: 3px 3px 0 0; }
+                    background: #17120f; border-radius: 3px 3px 0 0; }
 .chan .vrange { margin: -4px 0 2px; }
 .chan .minmax { display: flex; gap: 6px; align-items: center; color: var(--dim); font-size: 11px; }
 .chan .minmax input[type=number] { width: 5.5em; padding: 2px 4px; font-size: 11px;
@@ -392,7 +427,7 @@ button.mini:not(:disabled):hover { background: #26457a; }
               font-size: 11px; color: var(--dim); }
 #scl-legend span::before { content: ""; display: inline-block; width: 10px; height: 10px;
                             margin-right: 5px; vertical-align: -1px; border-radius: 2px;
-                            background: var(--sw); border: 1px solid #0b1020; }
+                            background: var(--sw); border: 1px solid #17120f; }
 
 .scene.best { position: relative; }
 .scene.best::before {
@@ -403,14 +438,14 @@ button.mini:not(:disabled):hover { background: #26457a; }
 }
 /* Which card the map shows now (.current) and, from the scrub preview, which
    one a hover or key press previews without changing what is shown (.peek). */
-.scene.current { outline: 2px solid #6ea8ff; outline-offset: -2px; }
-.scene.peek { outline: 2px dashed #6ea8ff; outline-offset: -2px; }
+.scene.current { outline: 2px solid var(--accent); outline-offset: -2px; }
+.scene.peek { outline: 2px dashed var(--accent); outline-offset: -2px; }
 
 #apibox { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 #apibox summary { cursor: pointer; color: var(--dim); font-size: 12px; }
 #apibox pre {
-  white-space: pre-wrap; word-break: break-word; font-size: 11px;
-  background: var(--panel-2); padding: 8px; border-radius: 4px; color: #b9c8e6;
+  white-space: pre-wrap; word-break: break-word; font: 400 10.5px/1.5 var(--mono);
+  background: var(--panel-2); padding: 8px; border-radius: 4px; color: #d8cfc2;
 }
 #apibox pre:empty { display: none; }
 .foot { margin-top: 16px; color: var(--dim); font-size: 11.5px; }
@@ -424,14 +459,25 @@ button.mini:not(:disabled):hover { background: #26457a; }
   border: 1px solid var(--line); border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, .6); font-size: 13.5px;
 }
-#welcome::backdrop { background: rgba(5, 8, 16, .6); }
-#welcome h2 { font-size: 17px; text-transform: none; letter-spacing: .2px; color: var(--ink); }
+#welcome::backdrop { background: rgba(10, 7, 5, .66); }
+/* The dialog is the ✕'s positioning context, and the wordmark sits above
+   the heading with room kept clear of the ✕. */
+#welcome { position: relative; }
+#welcome .brand-mark { width: 150px; margin: 0 0 12px; color: var(--dim); }
+#welcome-x {
+  position: absolute; right: 10px; top: 10px; width: 24px; height: 24px;
+  padding: 0; line-height: 1; border-radius: 50%; font-size: 12px;
+}
+#welcome h2 { font-size: 20px; font-weight: 700; text-transform: none;
+              letter-spacing: -.02em; color: var(--ink); }
 #welcome p { margin: 0 0 10px; color: var(--dim); }
 #welcome ol { margin: 0 0 14px; padding-left: 20px; }
 #welcome li { margin: 0 0 6px; }
 #welcome form { text-align: right; }
-#welcome-go { background: #1d365e; border-color: #2b4c86; padding: 6px 14px; }
-#welcome-go:hover { background: #26457a; }
+/* The one primary button on the page wears the institute's coral. */
+#welcome-go { background: var(--brand); border-color: var(--brand); color: #2a0d05;
+  font-weight: 600; padding: 6px 14px; }
+#welcome-go:hover { background: #ff6648; border-color: #ff6648; }
 
 /* The basemap label switch, under the zoom buttons. MapLibre's own control
    buttons carry a background icon and set no type, so a button with a letter
