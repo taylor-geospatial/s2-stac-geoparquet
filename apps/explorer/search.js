@@ -274,6 +274,14 @@ async function searchPartWith(meta, url, tileColumn, tile, tally) {
   return parts.flat().filter((r) => r[tileColumn] === tile);
 }
 
+// One formatter, so the read time reads the same in the plan and beside
+// the scene count. Below a twentieth of a second toFixed(1) would round to
+// "0.0 s", which reads as "no time at all" rather than "fast".
+export const fmtSecs = (ms) => {
+  const s = ms / 1000;
+  return s < 0.05 ? "< 0.1 s" : `${s.toFixed(1)} s`;
+};
+
 // The raw read: every row of `tile` in the given parts, projected to the
 // card fields, sorted by time. sceneRows applies no date, cloud or
 // coverage filter and no limit; the page filters in memory so a slider
@@ -304,15 +312,17 @@ export async function sceneRows({ urls, tileColumn, tile, sidecars = true }) {
     };
   }).filter(Boolean)
     .sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const secs = ((performance.now() - t0) / 1000).toFixed(1);
+  const ms = performance.now() - t0;
   const plan = `hyparquet range-read plan (no SQL engine, no API):\n`
     + `  ${tally.parts} part(s) held ${tile}, ${tally.groups} row group(s) admitted by their`
     + ` ${tileColumn} ranges\n`
     + `  ${tally.gets} parallel range GETs, ${(tally.bytes / 1024).toFixed(0)} KiB`
-    + ` (footers cached per session), ${secs} s`
+    + ` (footers cached per session), ${fmtSecs(ms)}`
     + (tally.misses ? `\n  ${tally.misses} read(s) fell outside the prefetched chunks` : "")
     + (tally.absent ? `\n  ${tally.absent} part(s) answered 404 and were read as empty` : "");
-  return { rows, plan };
+  // `ms` is the same measurement the plan prints, handed back as a number so
+  // the panel can show it and average it over the session.
+  return { rows, plan, ms };
 }
 
 // The full search, shaped exactly like the DuckDB query it replaces:

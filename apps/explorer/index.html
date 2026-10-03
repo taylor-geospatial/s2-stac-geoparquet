@@ -202,7 +202,9 @@
     <!-- The same answer as a query a reader can paste into DuckDB. The page
          never runs it; it is here so the list above can be reproduced
          without this page. app.js keeps it in step with the filters. -->
-    <p class="ducklead">Reproduce this list in DuckDB:</p>
+    <p class="ducklead">Reproduce this list in DuckDB:
+      <label class="duckprep"><input type="checkbox" id="duck-prep">
+        full setup</label></p>
     <pre id="duck"></pre></details>
   <footer class="foot">Static GeoParquet + PMTiles on
     <a href="https://source.coop/tge-labs/s2-stac-geoparquet">Source Cooperative</a>.
