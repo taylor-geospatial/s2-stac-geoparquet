@@ -19,22 +19,30 @@ catalog it saw before.
 Nothing else at the old prefix is touched. The collections, the items and the
 data files are left exactly as they are.
 
+It writes through the Source Cooperative gateway with the credentials the
+`source-coop` CLI issues. Run `source-coop login` first.
+
 Usage:
     python3 migration/deprecate_old_prefix.py                  # print the plan
     python3 migration/deprecate_old_prefix.py --confirm        # upload
-    python3 migration/deprecate_old_prefix.py --profile NAME   # pick an identity
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import pathlib
 import subprocess
 import sys
+import tempfile
 import urllib.request
 
-BUCKET = "us-west-2.opendata.source.coop"
-OLD_KEY = "portolan-mirrors/sentinel-2-catalog"
-OLD_HTTPS = f"https://data.source.coop/{OLD_KEY}"
+# At the gateway the organization is the bucket and the product is the first
+# key segment. This is not the raw AWS bucket in catalog.publish.yaml.
+ENDPOINT = "https://data.source.coop"
+BUCKET = "portolan-mirrors"
+OLD_KEY = "sentinel-2-catalog"
+OLD_HTTPS = f"https://data.source.coop/{BUCKET}/{OLD_KEY}"
 NEW_HTTPS = "https://data.source.coop/tge-labs/s2-stac-geoparquet"
 NEW_PAGE = "https://source.coop/tge-labs/s2-stac-geoparquet"
 
@@ -106,12 +114,23 @@ def patch_readme(raw: bytes) -> str:
     return out
 
 
-def upload(body: str, key: str, content_type: str, profile: str) -> None:
+AWS_CONFIG = """[profile s2mig_dep]
+region = us-west-2
+credential_process = source-coop creds --format credential-process
+"""
+
+
+def upload(body: str, key: str, content_type: str) -> None:
+    cfg = pathlib.Path(tempfile.gettempdir()) / "s2-migration" / "awsconfig-dep"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(AWS_CONFIG)
+    env = dict(os.environ, AWS_CONFIG_FILE=str(cfg))
     subprocess.run(
-        ["aws", "--profile", profile, "--region", "us-west-2",
+        ["aws", "--profile", "s2mig_dep", "--region", "us-west-2",
+         "--endpoint-url", ENDPOINT,
          "s3", "cp", "-", f"s3://{BUCKET}/{key}",
          "--content-type", content_type],
-        input=body.encode("utf-8"), check=True)
+        input=body.encode("utf-8"), check=True, env=env)
     print(f"  uploaded s3://{BUCKET}/{key}")
 
 
@@ -119,8 +138,6 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--confirm", action="store_true",
                     help="upload the patched objects")
-    ap.add_argument("--profile", default="portolan-mirrors",
-                    help="AWS profile that can write the retired prefix")
     args = ap.parse_args()
 
     print(f"reading the published objects at {OLD_HTTPS}/")
@@ -144,10 +161,9 @@ def main() -> int:
         print("\nDry run. Re-run with --confirm to upload.")
         return 0
 
-    print(f"\nuploading with profile {args.profile}")
-    upload(cat_out, f"{OLD_KEY}/catalog.json", "application/json",
-           args.profile)
-    upload(rd_out, f"{OLD_KEY}/README.md", "text/markdown", args.profile)
+    print("\nuploading through the gateway")
+    upload(cat_out, f"{OLD_KEY}/catalog.json", "application/json")
+    upload(rd_out, f"{OLD_KEY}/README.md", "text/markdown")
     print("\ndone. The retired prefix now points at the new location.")
     return 0
 

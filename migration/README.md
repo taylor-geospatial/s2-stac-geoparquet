@@ -26,17 +26,24 @@ catalog went.
    and the gateway answered `NoSuchBucket` for the prefix. Create the product
    under the `tge-labs` organization first. Every step below depends on it.
 
-2. **Know which identity writes where.** Source Cooperative scopes a role to
-   one organization, so the role that writes `portolan-mirrors` cannot write
-   `tge-labs`. Step 2 needs one identity that reads the old prefix and writes
-   the new one. `sync_data.sh` checks for both before it copies anything.
-
-3. **Refresh the session.** The `portolan-mirrors` profile chains through the
-   `radiant-source` SSO session, which expires:
+2. **Log in with the Source Cooperative CLI.** It issues temporary S3
+   credentials for the gateway. One logged-in account reads the retired
+   repository and writes the current one.
 
    ```bash
-   aws sso login --sso-session radiant-source
+   source-coop login
    ```
+
+   The scripts read those credentials through `credential_process`, so no
+   secret reaches a file in this repository or the terminal. The credentials
+   carry no `sts:GetCallerIdentity` permission, so a preflight check uses a
+   read and a round-tripped object instead.
+
+3. **Use the gateway, not the raw bucket.** `catalog.publish.yaml` names the
+   AWS bucket `us-west-2.opendata.source.coop`, which takes an IAM role. The
+   migration scripts use the gateway at `https://data.source.coop`, where the
+   organization is the bucket and the product is the first key segment. The
+   CLI credentials work at the gateway.
 
 ## Steps
 
@@ -57,22 +64,34 @@ a named error when the variable is empty.
 
 ### 2. Copy the objects
 
-Both prefixes are in one bucket, so the copy is server-side. No object travels
-to your machine, and no egress is billed.
-
 ```bash
 bash migration/sync_data.sh                      # inventory and plan
-bash migration/sync_data.sh --confirm            # copy
-bash migration/sync_data.sh --verify             # compare the two prefixes
+bash migration/sync_data.sh --confirm            # server-side copy
+bash migration/stream_oversized.sh --confirm     # the objects above 5 GB
+bash migration/sync_data.sh --verify             # compare the two repositories
 ```
 
-The copy leaves behind the scratch prefixes the retired location accumulated:
-`_work/`, `_smoke/`, `_experiments/` and `_access-check`. They are build
-artifacts rather than catalog content. `_assets/` is copied, because
-`catalog.json` links the icon in it.
+Most objects copy server-side and never travel to your machine. Three gateway
+limits shape the rest, each measured on 2026-10-03:
 
-`--verify` lists both prefixes and compares every key and size. It exits
-non-zero on a difference and prints the first 60 differing lines.
+| Gateway behaviour | What the scripts do |
+|---|---|
+| No `UploadPartCopy`, so a server-side copy must fit one `CopyObject` call, which S3 caps at 5 GB | `sync_data.sh` raises `multipart_threshold` to 5 GB and skips the larger objects |
+| `GetObjectTagging` answers 500 | every copy passes `--copy-props none` |
+| A large single `PutObject` answers 413 | `stream_oversized.sh` uploads with multipart |
+
+`stream_oversized.sh` downloads each object above 5 GB and uploads it again,
+one at a time, so the peak disk use is the largest object. It checks the
+downloaded byte count against the source before it uploads.
+
+A read timeout during the server-side copy does not mean the copy failed. The
+gateway can finish a multi-GB `CopyObject` after the client stops waiting.
+`--verify` is what decides whether an object arrived. It compares every key
+and size across the two repositories and exits non-zero on a difference.
+
+This catalog measured 371 objects and 62 GB. The server-side pass moved 369 of
+them in about 3 minutes. Streaming what remained above 5 GB took about 15
+minutes, at 27 MB/s down and 25 MB/s up.
 
 ### 3. Check the data answers
 
