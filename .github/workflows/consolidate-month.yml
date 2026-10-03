@@ -65,7 +65,8 @@ name: consolidate-month
 # First collection only. Collection 1 (sentinel-2-c1-l2a) is not
 # consolidated here: its archive is one items.parquet per year, up to 7
 # million rows in one file, past this runner's disk and the 6-hour ceiling.
-# Its live.parquet is folded on the TGI RAILS cluster by a person
+# Its live.parquet is folded on the Taylor Geospatial RAILS cluster by a
+# person
 # (tools/rails/fold_live.sbatch, every month or two and at year end;
 # tools/README.md, "Sync & backfill"). refresh-daily's Collection 1 job
 # appends to live and restamps its metadata daily; the fold's laptop step

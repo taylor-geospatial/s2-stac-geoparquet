@@ -18,8 +18,8 @@ sort key, row-group size, live compression, the lookback field.
 ## Sync & backfill
 
 Two techniques, one per collection. The first collection runs on GitHub
-Actions end to end. Collection 1 is backfilled and folded on the TGI RAILS
-cluster, and GitHub only appends its daily tail.
+Actions end to end. Collection 1 is backfilled and folded on the Taylor
+Geospatial RAILS cluster, and GitHub only appends its daily tail.
 
 | | `sentinel-2-l2a` | `sentinel-2-c1-l2a` |
 |---|---|---|

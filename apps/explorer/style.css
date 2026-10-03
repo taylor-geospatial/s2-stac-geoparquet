@@ -1,7 +1,7 @@
-/* The palette is the Taylor Geospatial Institute's, in its dark form: the
-   institute's research pages carry the same brown-black surfaces, ivory ink
-   and coral mark (research.taylorgeospatial.org). --accent is the
-   institute's periwinkle, which the page uses the way it used its old blue
+/* The palette is Taylor Geospatial's, in its dark form: their research
+   pages carry the same brown-black surfaces, ivory ink and coral mark
+   (research.taylorgeospatial.org). --accent is their periwinkle, which the
+   page uses the way it used its old blue
    — links, slider fills, the scrub track — so every rule below that reads
    var(--accent) keeps its meaning. --brand is the coral, reserved for the
    wordmark rule and the one primary button, so it never competes with the

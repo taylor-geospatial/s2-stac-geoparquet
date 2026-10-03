@@ -1,10 +1,11 @@
 <!-- vale Portolan-Mechanics.Headings = NO -->
-<!-- RAILS and TGI are proper names, and "Collection 1" is ESA's product. -->
-# RAILS lane: Collection 1 on the TGI Slurm cluster
+<!-- RAILS is the cluster name, and "Collection 1" is ESA's product. -->
+# RAILS lane: Collection 1 on the Taylor Geospatial Slurm cluster
 <!-- vale Portolan-Mechanics.Headings = YES -->
 
 The `sentinel-2-c1-l2a` collection (Earth Search's Sentinel-2 Collection 1,
-30.4 million items) is fetched, built and uploaded from the TGI RAILS
+30.4 million items) is fetched, built and uploaded from the Taylor
+Geospatial RAILS
 cluster, not from GitHub runners. A year of Collection 1 is one file of up
 to 5 million rows; a GitHub job has 6 hours and 14 GB of disk, a RAILS
 node has 192 CPUs, 512 GB of memory and shared storage. This directory is
