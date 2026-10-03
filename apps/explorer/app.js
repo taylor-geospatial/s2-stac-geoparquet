@@ -59,10 +59,21 @@ if (!window.deck?.MapboxOverlay) {
 }
 const { MapboxOverlay, GeoJsonLayer, MVTLayer } = window.deck;
 
+// The published catalog, through its two doors. The gateway serves a named
+// file over HTTP range requests, which is what this page reads. The bucket
+// is the same bytes, and DuckDB needs it: it expands a glob over s3:// and
+// refuses one over https:// ("Globs (*) for generic HTTP file are not
+// supported"). The copyable query in the "API request" box names the bucket
+// for that reason, and names it whatever ?base= says, so a reader always
+// gets a query against the published data.
+const PUBLIC_HTTPS = "https://data.source.coop/tge-labs/s2-stac-geoparquet";
+const PUBLIC_S3 = PUBLIC_HTTPS.replace(
+  "https://data.source.coop/", "s3://us-west-2.opendata.source.coop/");
+
 // ?base=http://localhost:8081 points the whole app at a local publish tree,
 // which is how it is developed before the bucket is populated.
 export const BASE = new URLSearchParams(location.search).get("base")
-  ?? "https://data.source.coop/tge-labs/s2-stac-geoparquet";
+  ?? PUBLIC_HTTPS;
 
 // The collections this page can show and what differs between them; the
 // rest — the stats products, the scene query, the COG reads — is the same
@@ -1713,6 +1724,8 @@ function updateFilterStatus() {
   // filters the user sees, not the ones the last read ran under. A slider
   // drag rewrites it with the rest of the apply.
   $("api").textContent = apiMirror(S.search.tile, S.from, S.to, S.maxCloud, S.minCoverage);
+  $("duck").textContent = duckdbQuery(S.search.tile, S.search.year, S.from, S.to,
+    S.maxCloud, S.minCoverage, S.sort);
   const view = currentView();
   $("rescount").textContent = `${view.length} of ${S.search.rows.length} scenes`;
   say(`${view.length} of ${S.search.rows.length} ${S.search.tile} scenes in `
@@ -2017,6 +2030,51 @@ function apiMirror(tile, d0, d1, cc, cov) {
       limit: 30,
     },
   }, null, 2);
+}
+
+// The same answer as a query a reader can paste into DuckDB. The page does
+// not run it. It is here so the result list above can be reproduced, and
+// checked, without this page.
+//
+// Every gate is the SQL twin of one in results.js, so the two return the
+// same rows:
+//   * the date window is inclusive at both ends (filterRows t0/t1),
+//   * the coverage floor is a no-op at 0, and a NULL coverage always
+//     passes, because the floor never excludes what it cannot judge,
+//   * the sort carries the same tiebreak on id.
+// `year=YYYY/*.parquet` opens the year's archive part and its live parts
+// together, which is the set a search reads.
+function duckdbQuery(tile, year, d0, d1, cc, cov, sort) {
+  const q = (c) => (/^[a-z_][a-z0-9_]*$/.test(c) ? c : `"${c}"`);
+  const tileCol = q(COL.tileColumn);
+  const cloud = '"eo:cloud_cover"';
+  const nodata = '"s2:nodata_pixel_percentage"';
+
+  const where = [
+    `${tileCol} = '${tile}'`,
+    `datetime BETWEEN '${d0}T00:00:00Z' AND '${d1}T23:59:59.999Z'`,
+    `${cloud} <= ${cc}`,
+  ];
+  if (cov > 0) where.push(`(${nodata} IS NULL OR 100 - ${nodata} >= ${cov})`);
+
+  const order = {
+    cloud: `${cloud}, id`,
+    coverage: `coverage DESC NULLS LAST, ${cloud}, id`,
+    date: "datetime DESC, id",
+  }[sort] ?? `${cloud}, id`;
+
+  return [
+    "-- The same answer, from DuckDB. Needs 1.4 or newer for GeoParquet 2.0.",
+    "INSTALL httpfs; LOAD httpfs;",
+    "SET s3_region = 'us-west-2';",
+    "SET s3_url_style = 'path';",
+    "SET TimeZone = 'UTC';",
+    "",
+    `SELECT id, datetime, ${cloud} AS cloud, 100 - ${nodata} AS coverage`,
+    `FROM read_parquet('${PUBLIC_S3}/${COL.dir}/year=${year}/*.parquet')`,
+    `WHERE ${where.join("\n  AND ")}`,
+    `ORDER BY ${order};`,
+  ].join("\n");
 }
 
 const bboxOf = (r) => {
@@ -3328,6 +3386,8 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   // The mirror while the read runs. updateFilterStatus keeps it current from
   // the first rows on, but it cannot write it yet: S.search is null here.
   $("api").textContent = apiMirror(tile, S.from, S.to, S.maxCloud, S.minCoverage);
+  $("duck").textContent = duckdbQuery(tile, year, S.from, S.to, S.maxCloud,
+    S.minCoverage, S.sort);
   say(`Range-reading tile ${tile}'s ${year} scenes…`);
   let got;
   try {
@@ -3342,6 +3402,7 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   if (!got.urls.length) {
     $("sql").textContent = "";
     $("api").textContent = "";
+    $("duck").textContent = "";
     box.replaceChildren(el("p", "hint",
       `No published ${COLLECTION_ID} parts cover ${year}. Pick a year the backfill has reached.`));
     say(`Nothing published for ${year} in ${COLLECTION_ID} yet.`);

@@ -198,7 +198,12 @@
   <div id="sortrow"><span id="rescount"></span><label>Sort <select id="sort"></select></label></div>
   <section id="results"></section>
   <details id="apibox"><summary>The "API request" this answered</summary>
-    <pre id="api"></pre><pre id="sql"></pre></details>
+    <pre id="api"></pre><pre id="sql"></pre>
+    <!-- The same answer as a query a reader can paste into DuckDB. The page
+         never runs it; it is here so the list above can be reproduced
+         without this page. app.js keeps it in step with the filters. -->
+    <p class="ducklead">Reproduce this list in DuckDB:</p>
+    <pre id="duck"></pre></details>
   <footer class="foot">Static GeoParquet + PMTiles on
     <a href="https://source.coop/tge-labs/s2-stac-geoparquet">Source Cooperative</a>.
     No server, no API, no database.<br>
@@ -275,7 +280,7 @@
      <a href="https://browser.portolan-sdi.org/#/external/data.source.coop/tge-labs/s2-stac-geoparquet/catalog.json"
         target="_blank" rel="noopener">s2-stac-geoparquet dataset</a> (provided
      as a <a href="https://portolan-sdi.org/" target="_blank" rel="noopener">Portolan
-     Catalog</a>) to power other applications or bulk data analysis, and the
+     catalog</a>) to power other applications or bulk data analysis, and the
      <a href="https://github.com/taylor-geospatial/s2-stac-geoparquet"
         target="_blank" rel="noopener">full source code</a> is available.</p>
   <p>The default view enables exploration of the overall statistics of the full
