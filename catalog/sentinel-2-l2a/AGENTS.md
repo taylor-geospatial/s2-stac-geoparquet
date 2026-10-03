@@ -2,7 +2,7 @@
 
 Guidance for AI agents and automated clients querying this collection.
 
-**One rule survives every edit to this file.** Every claim here is either
+**One rule governs each edit to this file.** A claim here is either
 quoted from a source or measured from the data. If you cannot point at where a
 fact came from, it does not belong in this file. An agent acting on an invented
 column name or an invented join key produces a confident wrong answer, and
@@ -11,29 +11,29 @@ nothing downstream catches it.
 ## What this is
 
 One row per Sentinel-2 L2A scene in the AWS Earth Search item index,
-republished as partitioned GeoParquet. The imagery is not here: it is in the
-public `sentinel-cogs` bucket on AWS, and every COG URL is already in the
-`assets` column of the row that describes it.
+republished as partitioned GeoParquet. The imagery stays in the public
+`sentinel-cogs` bucket on AWS, and the `assets` column of each row already
+includes its COG URLs.
 
 ```
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/items.parquet   2015-2018
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z01-20.parquet   2019-2020, four parts
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z21-35.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z36-46.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z47-60.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z01-15.parquet   2021 onward, eight parts
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z16-20.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z21-31.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z32-35.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z36-40.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z41-46.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z47-52.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/z53-60.parquet
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=YYYY/live.parquet    current year only
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/items.parquet   2015-2018
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z01-20.parquet   2019-2020, four parts
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z21-35.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z36-46.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z47-60.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z01-15.parquet   2021 onward, eight parts
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z16-20.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z21-31.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z32-35.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z36-40.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z41-46.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z47-52.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/z53-60.parquet
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=YYYY/live.parquet    current year only
 ```
 
 A year's archive is one of three shapes, and the year tells you which.
-2015-2018 are a single `items.parquet` each. From 2019 the archive is split
+2015-2018 are one `items.parquet` each. From 2019 the archive is split
 by the UTM zone of `s2:mgrs_tile` (the leading one or two digits of the tile
 id): 2019 and 2020 into four files, and from 2021 into eight, whose
 boundaries sit inside the four (every quartile edge is also an octant edge):
@@ -67,7 +67,7 @@ SET s3_url_style = 'path';
 SET TimeZone = 'UTC';
 
 SELECT year, count(*) AS scenes, min(datetime) AS first, max(datetime) AS last
-FROM read_parquet('s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=*/*.parquet',
+FROM read_parquet('s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=*/*.parquet',
                   hive_partitioning = true)
 WHERE year IN (2016, 2017)
 GROUP BY year ORDER BY year;
@@ -101,7 +101,7 @@ SET TimeZone = 'UTC';
 
 SELECT id, datetime, "eo:cloud_cover",
        json_extract_string(assets, '$.visual.href') AS visual_cog
-FROM read_parquet('s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=*/*.parquet',
+FROM read_parquet('s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=*/*.parquet',
                   hive_partitioning = true)
 WHERE year = 2021
   AND "s2:mgrs_tile" = '31UFU'
@@ -123,9 +123,9 @@ Row-group size differs by vintage: parts published through 2023 carry
 from 2024 on carry ~6k-row groups (~0.85 MB per hit). Sort order also
 differs by vintage: through 2025 rows are ordered (_month, _hilbert); from
 2026 they are ordered (_month, s2:mgrs_tile, _hilbert), so one tile's scenes
-for a month sit in a single small row group and a tile lookup is one range
-request. All vintages read identically; only bytes and requests per hit
-differ, and the older years are rebuilt when a larger machine allows. When
+for a month occupy one small row group and a tile lookup is one range
+request. All vintages read identically, differing only in bytes and requests
+per hit, and the older years are rebuilt when a larger machine allows. When
 you know the tile, skip them entirely: pick the file by zone and year. Zone
 31 in 2021 is in `z21-31.parquet`, so the same query touches one file:
 
@@ -135,7 +135,7 @@ SET TimeZone = 'UTC';
 
 SELECT id, datetime, "eo:cloud_cover",
        json_extract_string(assets, '$.visual.href') AS visual_cog
-FROM read_parquet('https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=2021/z21-31.parquet')
+FROM read_parquet('https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a/year=2021/z21-31.parquet')
 WHERE "s2:mgrs_tile" = '31UFU'
   AND _month BETWEEN 8 AND 10
   AND "eo:cloud_cover" < 10
@@ -170,28 +170,28 @@ per column; that is the authority, and this section covers what a description
 cannot say on its own.
 
 **Spatial.** `geometry` is the scene footprint in CRS84. `bbox` is the same
-footprint as `[w, s, e, n]`. `s2:mgrs_tile` is the MGRS tile id, for example
-`31UFU`, and it is THE join key: scenes over one place share it across all
+footprint as `[w, s, e, n]`. `s2:mgrs_tile` is the MGRS tile id, such as
+`31UFU`, and it is the join key. Scenes over one place share it across all
 years.
 
 **Time.** `datetime` is the acquisition instant, UTC. `s2:generation_time` is
 when ESA processed the product, not when the satellite looked.
 
-**Two added columns, and they are helpers, not STAC.** They exist so that
+**The added columns are query helpers rather than STAC.** They exist so that
 readers can prune:
 
 - `_month` — `month(datetime)`, 1 to 12. The first sort key.
 - `_hilbert` — `ST_Hilbert(geometry, world bounds)`. The last sort key.
 
-Every part file is written sorted by month first, so that a month filter
-prunes row groups inside a year, and by Hilbert position last, so that each
-row group's bounding box stays tight and a spatial filter prunes too. Parts
-published through 2025 are `(_month, _hilbert)`; parts from 2026 are
-`(_month, s2:mgrs_tile, _hilbert)`, which puts one tile's month in a single
-row group (see Row-group size above).
-Nothing upstream publishes these two columns. Do not pass them on as STAC
-properties, and do not treat `_hilbert` as meaningful on its own — it is a
-position on a space-filling curve, not a measurement.
+Each part file is written sorted by month first, so a month filter prunes row
+groups inside a year. Hilbert position sorts last, which narrows each row
+group's bounding box so a spatial filter prunes as well. Parts published
+through 2025 are `(_month, _hilbert)`, and parts from 2026 are
+`(_month, s2:mgrs_tile, _hilbert)`, which puts one tile's month in one row
+group (see Row-group size above).
+Earth Search publishes neither of these two columns. Do not pass them on as
+STAC properties, and read `_hilbert` only as a position on a space-filling
+curve, which orders rows and measures nothing.
 
 **Everything else** is the upstream STAC property under its upstream name,
 unchanged. Two of them are reconstructed when Earth Search omits them, and
@@ -199,7 +199,7 @@ never invented: `sat:relative_orbit` is parsed from the `_R(\d{3})_` group of
 `s2:product_uri`, and `s2:mean_solar_zenith` is computed as
 `90 - view:sun_elevation`.
 
-## NULLs you will meet
+## Null columns
 
 `s2:granule_id` and `sat:orbit_state` are NULL on newer items. Earth Search
 stopped publishing those two properties, and this mirror leaves an absent value
@@ -213,8 +213,9 @@ the upstream item did not carry them.
 ## Coverage
 
 The record starts in November 2016, when Earth Search produced its first L2A
-Cloud-Optimized GeoTIFFs: nothing for 2015 and most of 2016, part of
-2017-2018, complete from about December 2018.
+Cloud-Optimized GeoTIFFs. No items exist for 2015 and most of 2016. The years
+2017 and 2018 are partial, and the record is complete from about December
+2018.
 
 That is what Earth Search and the `sentinel-cogs` bucket serve, not a gap
 introduced here. Do not report "no scenes in early 2016" as an observation
@@ -228,7 +229,7 @@ count and time range before you conclude anything about a period.
 `assets` is a VARCHAR holding the upstream STAC assets object verbatim, as a
 compact JSON string. It is a string on purpose: deeply nested structs make a
 Parquet file hard for some readers to open, and a string keeps every reader's
-schema flat. The cost is that you parse it.
+schema flat. You parse it in exchange.
 
 ```sql
 json_extract_string(assets, '$.visual.href')   -- one href
@@ -273,12 +274,12 @@ replaces that copy, so dedupe on `id` keeping the highest
 within a year. Across the whole table, treat `id` as unique and report it if
 you ever find otherwise.
 
-## What this collection does not do
+## Scope of the mirror
 
-It does not filter, reclassify or interpolate anything Earth Search publishes.
-It adds `_month`, `_hilbert` and the flat `thumbnail_url`, and nothing else.
-There is no STAC API in front of it: query the Parquet directly, over HTTP
-range requests, with no key and no rate limit.
+This collection does not filter, reclassify or interpolate anything Earth
+Search publishes. It adds `_month`, `_hilbert` and the flat `thumbnail_url`,
+and no other column. No STAC API stands in front of it, so query the Parquet
+directly over HTTP range requests, without a key.
 
 Structural links resolve relative to the object that carries them. Objects here
 carry no `self` link, so a client tracks its own location.

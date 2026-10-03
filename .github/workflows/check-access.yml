@@ -16,16 +16,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # configure-aws-credentials reports an empty role-to-assume as a
+      # credential failure, which reads like a permission problem. Name the
+      # real cause before the action runs.
+      - name: Require the role variable
+        run: |
+          set -euo pipefail
+          if [ -z "${ROLE_ARN}" ]; then
+            echo "::error::The repository variable SOURCE_COOP_ROLE_ARN is not set."
+            echo "Set it to the role Source Cooperative provisions for the"
+            echo "tge-labs organization. See tools/README.md, 'Credentials'."
+            exit 1
+          fi
+          echo "role: ${ROLE_ARN}"
+        env:
+          ROLE_ARN: ${{ vars.SOURCE_COOP_ROLE_ARN }}
       - name: Assume the Source Cooperative write role
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
-          role-session-name: sentinel-2-catalog-access-check
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
+          role-session-name: s2-stac-geoparquet-access-check
           aws-region: us-west-2
       - name: Round-trip a marker object
         run: |
           set -euo pipefail
-          P=s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog/_access-check
+          P=s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet/_access-check
           date -u | aws s3 cp - "$P"
           aws s3 ls "$P"
           aws s3 rm "$P"

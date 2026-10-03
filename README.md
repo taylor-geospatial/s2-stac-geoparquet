@@ -1,61 +1,70 @@
-# sentinel-2-catalog
+# Sentinel-2 L2A STAC-GeoParquet mirror
 
-Every Sentinel-2 L2A scene in the AWS Earth Search archive, as a
+Every Sentinel-2 L2A scene that AWS Earth Search indexes, republished as a
 [Portolan](https://www.portolan-sdi.org/) catalog of partitioned
-STAC-GeoParquet you query in place. **51.3 million scenes, November 2016 to
-today**, refreshed daily. One row per scene carries the footprint, acquisition
-time, MGRS tile, cloud cover, the scene-classification percentages, and the
-complete upstream `assets` object. Every Cloud-Optimized GeoTIFF URL is
-therefore in the row that describes the scene.
+STAC-GeoParquet you query in place. The collection `sentinel-2-c1-l2a` indexes
+**30,396,466 scenes from October 2015 onward**, and `sentinel-2-l2a` indexes
+**51,279,608 from November 2016**. Both refresh daily.
 
-The imagery stays on AWS in the public `sentinel-cogs` bucket. This catalog
-carries only the item index and a small set of MGRS-tile aggregates, with
-**no API in front of it**. A client filters the whole archive with HTTP range
-reads against a public bucket: no key, no server, no rate limit.
+A row is one scene. It states the footprint, the acquisition time, the MGRS
+tile, the cloud cover, the scene-classification percentages and the complete
+upstream `assets` object, so a scene's Cloud-Optimized GeoTIFF URLs sit in the
+row that describes it.
+
+The imagery stays on AWS in public buckets. This catalog publishes the item
+index and a small set of MGRS-tile aggregates, with **no API in front of it**.
+A client filters the whole archive with HTTP range reads against a public
+bucket, without a key and without a server.
 
 - **Explore it**: https://research.taylorgeospatial.org/s2-stac-geoparquet/, a
-  static page that behaves like there is an API behind it. Every query runs
-  on [hyparquet](https://github.com/hyparam/hyparquet) range reads plus
-  PMTiles — a small pure-JS parquet reader in place of a 36 MB WASM query
-  engine. Any band, composite, NDVI/NDWI or the
-  SCL classes of a scene are drawn on the map straight from its COGs in
-  the browser, with histogram-and-handles stretch controls. The page
-  opens on Collection 1 (`sentinel-2-c1-l2a/` with `stats-c1/`), the
-  uniform reprocessed record and the default. The original
-  `sentinel-2-l2a` index stays available: the collection switch in the
-  sidebar (or `?collection=sentinel-2-l2a`) points the same page at it.
-- **Published catalog**: https://source.coop/portolan-mirrors/sentinel-2-catalog
-- **STAC root**: `https://data.source.coop/portolan-mirrors/sentinel-2-catalog/catalog.json`
+  static page that behaves as though an API sat behind it. Each query runs on
+  [hyparquet](https://github.com/hyparam/hyparquet) range reads plus PMTiles,
+  because a small pure-JS parquet reader replaces a 36 MB WASM query engine.
+  The page draws any band, composite, NDVI/NDWI or SCL class of a scene
+  straight from its COGs in the browser, with histogram-and-handles stretch
+  controls. It opens on Collection 1, the uniform reprocessed record. A switch
+  in the sidebar, or `?collection=sentinel-2-l2a`, points the same page at the
+  original index.
+- **Published catalog**: https://source.coop/tge-labs/s2-stac-geoparquet
+- **STAC root**: `https://data.source.coop/tge-labs/s2-stac-geoparquet/catalog.json`
+- **Browse it**: [the Portolan browser](https://browser.portolan-sdi.org/#/external/data.source.coop/tge-labs/s2-stac-geoparquet/catalog.json)
 - **Upstream**: [Earth Search](https://earth-search.aws.element84.com/v1) by
   [Element 84](https://element84.com/), over the
   [Sentinel-2 L2A COGs](https://registry.opendata.aws/sentinel-2-l2a-cogs/) on
   the AWS Registry of Open Data
 - **Issues and contributions**: https://github.com/taylor-geospatial/s2-stac-geoparquet/issues
 
+Agents should read [`catalog/AGENTS.md`](catalog/AGENTS.md) and the agent guide
+of the collection they query.
+
 ## Query it
 
-The driving use case: given a field and a planting or harvest window, find the
-cloud-free scenes, from a script, without an API. This is the explorer's own
-search, as a DuckDB snippet. Because a tile id and a year name the part, it
-reads one file, and only the row groups for those months:
+The driving use case is a field and a planting or harvest window, from a
+script, with no API in the way. Find the cloud-free scenes over one MGRS tile.
+Because a tile and a year identify the file, this reads one object and only the
+row groups that store the tile:
 
 ```sql
 INSTALL httpfs; LOAD httpfs;
 SET TimeZone = 'UTC';
 
 SELECT id, datetime, "eo:cloud_cover" AS cloud, thumbnail_url
-FROM read_parquet('https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=2021/z21-31.parquet')
-WHERE "s2:mgrs_tile" = '31UFU'
-  AND _month BETWEEN 8 AND 10
+FROM read_parquet('https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/year=2021/items.parquet')
+WHERE _tile = '31UFU'
   AND datetime BETWEEN '2021-08-01' AND '2021-10-15 23:59:59'
   AND "eo:cloud_cover" <= 10
 ORDER BY "eo:cloud_cover", id
 LIMIT 30;
 ```
 
-The COG URLs are in the `assets` column, a JSON string of the upstream STAC
-assets object. It is the widest column in the table. Fetch it for the scenes
-you chose rather than for every candidate:
+Collection 1 joins on `_tile`, a column this mirror derives from `grid:code`,
+because Collection 1 items omit `s2:mgrs_tile`. The original index does include
+`s2:mgrs_tile`, and queries it instead. Column names containing a colon need
+double quotes.
+
+The `assets` column stores the COG URLs as a JSON string of the upstream STAC
+assets object. It is the widest column in the table, so read it for the scenes
+you chose rather than for each candidate:
 
 ```sql
 INSTALL httpfs; LOAD httpfs;
@@ -63,27 +72,21 @@ INSTALL httpfs; LOAD httpfs;
 SELECT json_extract_string(assets, '$.visual.href') AS visual,
        json_extract_string(assets, '$.red.href')    AS red,
        json_extract_string(assets, '$.scl.href')    AS scl
-FROM read_parquet('https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=2021/z21-31.parquet')
-WHERE _month = 10 AND id = 'S2B_31UFU_20211004_0_L2A'
+FROM read_parquet('https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/year=2021/items.parquet')
+WHERE _tile = '31UFU'
+  AND datetime BETWEEN '2021-10-04' AND '2021-10-04 23:59:59'
 LIMIT 1;
 ```
 
-Swap `$.visual.href` for any key on the scene (`red`, `nir`, `scl`,
-`thumbnail`, ...); the
-[collection agent guide](catalog/sentinel-2-l2a/AGENTS.md) lists them all.
-Column names with a colon need double quotes.
+Swap `$.visual.href` for any key on the scene, such as `red`, `nir`, `scl` or
+`thumbnail`. The
+[collection agent guide](catalog/sentinel-2-c1-l2a/AGENTS.md) lists each key. A
+Collection 1 id reads `S2B_T31UET_20260921T105030_L2A`, where the tile takes a
+`T` prefix that the `_tile` column drops.
 
-**Choosing the part.** The UTM zone is the leading digits of the tile id
-(`31UFU` is zone 31). A year through 2018 is one `items.parquet`; 2019-2020
-are four zone parts; 2021 onward are eight. So zone 31 in 2021 is
-`year=2021/z21-31.parquet`, and in 2019 it is `year=2019/z21-35.parquet`
-(the layout table below has every range). Add `year=YYYY/live.parquet` for the
-current year. Each `year=YYYY/YYYY.json` item lists that year's parts with
-their row counts and time ranges if you would rather discover than assume.
-
-**The whole archive.** The collection's partition glob is
-`year=*/*.parquet`. DuckDB expands it when it can list the store, which it can
-over `s3://` anonymously:
+**The whole archive.** Each collection sets `partition:glob` to
+`year=*/*.parquet`. DuckDB expands a glob when it can list the store, which it
+can do over `s3://` anonymously:
 
 ```sql
 INSTALL httpfs; LOAD httpfs;
@@ -92,87 +95,100 @@ SET s3_url_style = 'path';
 SET TimeZone = 'UTC';
 
 SELECT year, count(*) AS scenes, min(datetime) AS first, max(datetime) AS last
-FROM read_parquet('s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a/year=*/*.parquet',
+FROM read_parquet('s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/year=*/*.parquet',
                   hive_partitioning = true)
 WHERE year IN (2016, 2017)
 GROUP BY year ORDER BY year;
 ```
 
-`hive_partitioning` exposes `year` as a column that is not stored in the
-files, and a filter on it skips whole files, so that query opens two parts
-out of sixty.
+`hive_partitioning` exposes `year` as a column the files omit, and a filter on
+it skips whole files, so that query opens two years out of twelve.
 
-Over plain `https://` DuckDB does not expand a glob. It says so, with
-"Globs (`*`) for generic HTTP file are not supported", and the fix is to name
-the parts in a list. Two cautions apply to either form.
+Over plain `https://` DuckDB does not expand a glob. It reports "Globs (`*`)
+for generic HTTP file are not supported", and the fix is to list the parts by
+name.
 
-The parts are 0.1-2.8 GB each, and a full scan of them over HTTP can fail
-partway on some networks. Even a `count(*)` over every part, which reads only
-footers and row-group statistics, took four minutes on one run here and hit
-DuckDB's HTTP timeout on another. The snippets on this page are range-pruned
-reads (tile, month and year predicates) by design; raise `http_timeout` and
+The parts run 0.1 GB to 2.8 GB each, and in either form a full scan over HTTP
+can fail partway on some networks. Even a `count(*)` over
+each part, which reads only footers and row-group statistics, took four minutes
+on one run here and hit DuckDB's HTTP timeout on another. Each snippet on this
+page is a range-pruned read by design, so raise `http_timeout` and
 `http_retries` before you scan wider.
 
-`live.parquet` and the current year's archive parts are disjoint. The daily
-rebuild re-reads a five-day window from Earth Search and drops every id the
-archive parts already hold. The two can overlap only for the minutes inside
-a consolidation between the upload of the merged archive parts and the upload
-of the emptied `live.parquet`. Deduping on `id` is always safe, and removes
-nothing when nothing overlaps.
+The live tail and the archive parts are disjoint. The daily rebuild re-reads a
+lookback window from Earth Search and drops each id the archive parts already
+store. An overlap is possible only during a consolidation, in the minutes
+between the upload of the merged archive parts and the upload of the emptied
+tail. Deduping on `id` is always safe, and it removes nothing when nothing
+overlaps.
 
-## Two collections
+## Four collections, two pairs
 
-| Collection | Holds | Read it |
+Each item index has a stats collection beside it. Start with Collection 1,
+which is ESA's uniform reprocessing of the archive and the pair the explorer
+opens on.
+
+| Collection | Contents | Read it |
 |---|---|---|
-| [`sentinel-2-l2a`](catalog/sentinel-2-l2a/README.md) | The item index: 51,279,608 scenes in 59 archive parts (2016-11-01 to 2026-09-17 at the last restamp) plus the current year's `live.parquet` tail. Complete from December 2018; before that, what Earth Search holds. | [README](catalog/sentinel-2-l2a/README.md), [agent guide](catalog/sentinel-2-l2a/AGENTS.md) |
-| [`stats`](catalog/stats/README.md) | MGRS tile x month aggregates over the whole index and a tile-footprint tileset, for the explorer and for planning a query before running it. | [README](catalog/stats/README.md), [agent guide](catalog/stats/AGENTS.md) |
+| [`sentinel-2-c1-l2a`](catalog/sentinel-2-c1-l2a/README.md) | The Collection 1 item index: 30,396,466 scenes, 2015-10-22 to 2026-09-21 at the last restamp, one `items.parquet` per year plus a `live-MM.parquet` tail per month. | [README](catalog/sentinel-2-c1-l2a/README.md), [agent guide](catalog/sentinel-2-c1-l2a/AGENTS.md) |
+| [`stats-c1`](catalog/stats-c1/README.md) | MGRS tile by month aggregates over Collection 1, and a tile-footprint tileset. | [README](catalog/stats-c1/README.md), [agent guide](catalog/stats-c1/AGENTS.md) |
+| [`sentinel-2-l2a`](catalog/sentinel-2-l2a/README.md) | The original Earth Search item index: 51,279,608 scenes, 2016-11-01 to 2026-09-17 at the last restamp, in zone-partitioned year parts plus a `live.parquet` tail. Complete from December 2018, and before that what Earth Search serves. | [README](catalog/sentinel-2-l2a/README.md), [agent guide](catalog/sentinel-2-l2a/AGENTS.md) |
+| [`stats`](catalog/stats/README.md) | The same aggregates over the original index. | [README](catalog/stats/README.md), [agent guide](catalog/stats/AGENTS.md) |
 
-The `stats` collection is four small products, all keyed by `mgrs_tile`:
+A stats collection is four small products, all keyed by `mgrs_tile`:
 
-- `stats/mgrs-monthly.parquet`: one row per tile per month, the whole
-  record in ~21 MB. It carries `scene_count`, `min_cloud_cover`,
-  `median_cloud_cover`, `mean_cover` and `max_cover` (percent of the tile its
-  scenes fill), and `best_item_id`/`best_item_date`, the least-cloudy scene of
-  the month. Every percent is an integer 0-100. Because it is sorted by
-  `(mgrs_tile, year, month)` in 50k-row groups, one tile's history is a range
-  read of one row group.
-- `stats/months/YYYY-MM.parquet`: that table cut to one month, paint columns
-  only, ~100-150 KB. The slices are not listed as assets; the name pattern is
-  the contract, and a 404 means the month has no tile-months.
-- `stats/timeline.parquet`: one row per month over all tiles, a few KB.
-- `stats/mgrs.pmtiles`: one polygon per MGRS tile on the vector layer `mgrs`.
-  The polygon is the envelope of the tile's scene footprints, not the true
+- `mgrs-monthly.parquet`: one row per tile per month, storing the whole record
+  in 17 MB for `stats-c1` and 21 MB for `stats`. Its columns are
+  `scene_count`, `min_cloud_cover`, `median_cloud_cover`, `mean_cover` and
+  `max_cover`, which give the share of the tile its scenes fill, with
+  `best_item_id` and `best_item_date` identifying the least-cloudy scene of the
+  month. Each share is an integer 0-100%. Sorting by
+  `(mgrs_tile, year, month)` in 50k-row groups turns one tile's history into a
+  range read of one row group.
+- `months/YYYY-MM.parquet`: that table cut to one month, paint columns only, at
+  about 126 KB for a recent month. The slices appear as no asset, because the
+  name pattern is the contract, and a 404 means the month has no tile-months.
+- `timeline.parquet`: one row per month over all tiles, a few KB.
+- `mgrs.pmtiles`: one polygon per MGRS tile on the vector layer `mgrs`. The
+  polygon is the envelope of the tile's scene footprints rather than the true
   grid cell.
 
-"Which month has a cloud-free scene here" is a stats question, not an archive
-scan:
+Answer "which month has a cloud-free scene here" from the stats rather than
+from an archive scan:
 
 ```sql
 INSTALL httpfs; LOAD httpfs;
 
 SELECT year, month, scene_count, min_cloud_cover, best_item_id, best_item_date
-FROM read_parquet('https://data.source.coop/portolan-mirrors/sentinel-2-catalog/stats/mgrs-monthly.parquet')
+FROM read_parquet('https://data.source.coop/tge-labs/s2-stac-geoparquet/stats-c1/mgrs-monthly.parquet')
 WHERE mgrs_tile = '31UFU' AND year = 2021
 ORDER BY year, month;
 ```
 
-And the newest month the table holds:
+And the newest month in a stats table:
 
 ```sql
 INSTALL httpfs; LOAD httpfs;
 
 SELECT year, month, tile_count, scene_count
-FROM read_parquet('https://data.source.coop/portolan-mirrors/sentinel-2-catalog/stats/timeline.parquet')
+FROM read_parquet('https://data.source.coop/tge-labs/s2-stac-geoparquet/stats-c1/timeline.parquet')
 ORDER BY year DESC, month DESC
 LIMIT 1;
 ```
 
-## Layout of `sentinel-2-l2a`
+## Layout
 
-Everything sits under `year=YYYY/` and matches the glob `year=*/*.parquet`.
-The shape of a year, and how its parts were written, changed as the mirror
-grew; every vintage reads with the same query, and only the bytes per hit
-differ.
+Both collections place every part directly under `year=YYYY/`, matching the
+glob `year=*/*.parquet`, with no `zone=` directory at any level.
+
+`sentinel-2-c1-l2a` is one `items.parquet` per year, in uniform row groups of
+about 6,000 rows, sorted by `(_tile, datetime)`. One tile's year is a
+contiguous run, so a tile-and-window query reads one or two groups. A year may
+also include `live-MM.parquet` files, one per month fetched since the last
+fold, because ESA's reprocessing still adds scenes to old years.
+
+`sentinel-2-l2a` grew in vintages, and its shape changed as it grew. Each
+vintage reads with the same query, at a different cost in bytes per hit.
 
 | Years | Parts per year | Row groups | Sort order |
 |---|---|---|---|
@@ -182,61 +198,74 @@ differ.
 | 2024-2025 | the same eight | ~6k rows | `(_month, _hilbert)` |
 | 2026- | the same eight, plus `live.parquet` for the current year | ~6k rows | `(_month, s2:mgrs_tile, _hilbert)` |
 
-The eight ranges nest inside the four, and both are fixed for the life of the
-catalog, so a tile id and a year always name one file. Because the 2026 sort
-puts one tile's month in a single small row group, a tile lookup there is one
-range request. Older parts read the same way at more bytes per hit. Rows are
-sorted by `_month` first in every vintage, so a month filter prunes row groups
-everywhere. The two `_`-prefixed columns are sort helpers added by the mirror,
-not STAC properties. Measured costs per vintage are in
+The UTM zone is the leading digits of the tile id, so `31UFU` is zone 31. The
+eight ranges nest inside the four, and both are fixed for the life of the
+catalog, so a tile id and a year together identify one file. Zone 31 in 2021 is
+`year=2021/z21-31.parquet`, and in 2019 it is `year=2019/z21-35.parquet`. Each
+`year=YYYY/YYYY.json` item lists that year's parts with their row counts and
+time ranges, for a reader who would rather discover than assume.
+
+Because the 2026 sort puts one tile's month in one small row group, a tile
+lookup there is one range request. Older parts read the same way at more bytes
+per hit. Rows sort by `_month` first in each vintage, so a month filter prunes
+row groups at every layout. The two `_`-prefixed columns are sort helpers this
+mirror adds rather than STAC properties. Measured costs per vintage are in
 [`docs/query-performance.md`](docs/query-performance.md).
 
 **Reader floors.** The parts are GeoParquet 2.0 with native geometry. DuckDB
-needs to be 1.4 or newer (duckdb-wasm 1.32 or newer); older versions refuse
-them with "Geoparquet version 2.0.0 is not supported". The explorer reads
-them with hyparquet, which has no such floor.
+must be 1.4 or newer, and duckdb-wasm 1.32 or newer, because older versions
+reject them with "Geoparquet version 2.0.0 is not supported". The explorer
+reads them with hyparquet, which sets no such floor.
 
-## What the numbers mean
+## Counts and coverage
 
-Earth Search's item counts roughly halve from 2022 (8.6 million scenes in
-2021, 4.2 million in 2022) without the satellites acquiring less. Earlier
-years mostly carry two items per scene, with ids ending `_0_L2A` and
-`_1_L2A`, for the same tile and acquisition; from 2022 the `_1_` twins largely
-stop. Over tile `31UFU`, 2021 has 454 items for 217 distinct acquisitions and
-2022 has 226 for 217. The mirror is faithful to the source: it adds no rows
-and drops none, so the halving is Earth Search's record, not a gap here.
+Earth Search's item counts in the original index roughly halve from 2022, with
+8.6 million scenes in 2021 against 4.2 million in 2022, although the satellites
+did not acquire less. Earlier years mostly include two items per scene for the
+same tile and acquisition, with ids ending `_0_L2A` and `_1_L2A`, and from 2022
+the `_1_` twins largely stop. Over tile `31UFU`, 2021 has 454 items for 217
+distinct acquisitions, where 2022 has 226 for 217. This mirror is faithful to
+its source, adding no rows and dropping none, so the halving reflects Earth
+Search's record rather than a gap here.
 
-Coverage before December 2018 is partial for the same reason: the record
-starts in November 2016 with Earth Search's first L2A COGs (2015 and most of
-2016 have no COG products), and 2017-2018 are partial. Two properties,
-`sat:orbit_state` and `s2:granule_id`, are NULL on newer items because Earth
-Search stopped publishing them. The
-[agent guide](catalog/sentinel-2-l2a/AGENTS.md) has the details.
+Coverage in the original index is partial before December 2018 for the same
+reason. Its record starts in November 2016 with Earth Search's first L2A COGs,
+because 2015 and most of 2016 produced no COG products, and 2017 and 2018 are
+partial. Two properties, `sat:orbit_state` and `s2:granule_id`, are NULL on
+newer items because Earth Search stopped publishing them.
+
+Collection 1 reaches back to October 2015 instead, since ESA reprocessed the
+archive to one baseline. That reprocessing is still running, so an old year
+keeps gaining scenes with recent `created` timestamps. The daily refresh for
+Collection 1 looks back on `created` rather than `datetime` for that reason.
+Each collection's [agent guide](catalog/sentinel-2-c1-l2a/AGENTS.md) records
+the NULLs and the quirks to expect from it.
 
 ## Update cadence
 
 | Workflow | When | Does |
 |---|---|---|
-| `refresh-daily` | daily, 03:42 UTC | Fetches the last five days from Earth Search into `live.parquet` (one per year the window touches, two around New Year), splices those years into the stats table, restamps counts and extents, uploads. Nothing is committed. A second job does the same for `sentinel-2-c1-l2a` on a `created` lookback (any year), into `stats-c1`, while the repository variable `C1_LIVE_ENABLED` is `true`; its tail is one file per month, `year=YYYY/live-MM.parquet`, so a day rewrites only the months it fetched. |
-| `consolidate-month` | the 3rd of each month, 05:17 UTC | Folds `live.parquet` into the year's archive parts for the current year and, while it still has a tail, the previous one, one job per part, deduped by `id`; then empties each folded `live`. |
-| `publish-stats` | manual | Full rebuild of `mgrs-monthly.parquet`, the month slices, `timeline.parquet` and `mgrs.pmtiles` from the published parts, one matrix entry per collection (`stats`, and `stats-c1` while `C1_LIVE_ENABLED` is `true`). |
-| `backfill` and `publish-backfill` | manual | Fetch the whole record one month-slice at a time, then the credentialed year-by-year build and upload. How the archive was seeded; also the repair path. |
-| `repair-slices` | manual | Re-fetch given months from the static item JSON in the `sentinel-cogs` bucket instead of the API, as `slice-YYYY-MM` artifacts `publish-backfill` consumes unchanged. |
-| `upload-file-data` | manual | Publishes one locally built data file (for example `mgrs.pmtiles`) from an https URL into a catalog directory. |
-| `check-access` | manual | Writes and deletes a marker object with the Source Cooperative role: a smoke test of the credentials. |
-| `publish-catalog` | manual | Publishes the committed `catalog/` metadata, after restamping the measured fields (row counts, extents, part sizes, `updated`) of both item indexes and both stats collections from the bucket, so the daily restamp is kept. |
+| `refresh-daily` | daily, 03:42 UTC | Fetches the last five days from Earth Search into `live.parquet`, one per year the window touches and two around New Year. It then splices those years into the stats table and restamps counts and extents before uploading, and it commits nothing. A second job does the same for `sentinel-2-c1-l2a` on a `created` lookback of any year, into `stats-c1`, while the repository variable `C1_LIVE_ENABLED` is `true`. Its tail is one file per month, `year=YYYY/live-MM.parquet`, so a day rewrites only the months it fetched. |
+| `consolidate-month` | the third of each month, 05:17 UTC | Folds `live.parquet` into the year's archive parts for the current year, and for the previous one while it still has a tail, with one job per part, deduped by `id`. It then empties each folded `live`. |
+| `publish-stats` | manual | Rebuilds `mgrs-monthly.parquet`, the month slices, `timeline.parquet` and `mgrs.pmtiles` in full from the published parts, with one matrix entry per collection. |
+| `backfill` and `publish-backfill` | manual | Fetch the whole record one month-slice at a time, then run the credentialed year-by-year build and upload. This seeded the archive, and it is also the repair path. |
+| `repair-slices` | manual | Re-fetches months from the static item JSON in the `sentinel-cogs` bucket instead of the API, as `slice-YYYY-MM` artifacts that `publish-backfill` consumes unchanged. |
+| `upload-file-data` | manual | Publishes one locally built data file, such as `mgrs.pmtiles`, from an https URL into a catalog directory. |
+| `check-access` | manual | Writes and deletes a marker object with the Source Cooperative role, as a smoke test of the credentials. |
+| `publish-catalog` | manual | Publishes the committed `catalog/` metadata, after restamping the measured fields of both item indexes and both stats collections from the bucket, which keeps the daily restamp. |
 | `pages` | on push to `apps/explorer/` | Deploys the explorer to GitHub Pages. |
 
-`tools/make_collection.py` regenerates the item index's `updated` stamp, row
+`tools/make_collection.py` regenerates each item index's `updated` stamp, row
 count and temporal extent from the published parts on every refresh, and
-`tools/make_stats_collection.py` does the same for the stats collection from
-`timeline.parquet`. Each `collection.json` is therefore the authority on what
-is here now.
+`tools/make_stats_collection.py` does the same for a stats collection from its
+`timeline.parquet`. The published `collection.json` is the authority on what is
+here now, and a committed one can lag it.
 
 ## The repository
 
-Catalog metadata lives in git and CI validates every change. The data lives
-in object storage next to it, referenced by URL and never committed.
+Catalog metadata is versioned alongside the code, where CI validates each
+change. The data is stored in object storage next to it, referenced by URL and
+never committed.
 
 | Kind | Where | Example |
 |---|---|---|
@@ -245,15 +274,22 @@ in object storage next to it, referenced by URL and never committed.
 | Neither | gitignored | GeoParquet, COGs, PMTiles, credentials |
 
 `tools/s2_fetch.py` and `tools/s2_build.py` fetch and compact the parts,
-`tools/s2_stats.py` builds the aggregates, `tools/make_items.py`,
+`tools/s2_stats.py` builds the aggregates, and `tools/make_items.py`,
 `tools/make_collection.py` and `tools/make_stats_collection.py` restamp the
-metadata, and `tools/publish.py` and
-`tools/upload_data.py` carry metadata and data to the bucket. How each
-collection is kept in sync with Earth Search, and how each was backfilled
-(GitHub for the first, the RAILS cluster for Collection 1), is in
-[`tools/README.md`](tools/README.md), "Sync & backfill". The design and
-its amendments are in
-[`docs/superpowers/specs/2026-09-15-sentinel-2-catalog-design.md`](docs/superpowers/specs/2026-09-15-sentinel-2-catalog-design.md).
+metadata. `tools/publish.py` and `tools/upload_data.py` upload metadata and
+data to the bucket. For how each collection stays in sync with Earth Search,
+and how each was backfilled, see [`tools/README.md`](tools/README.md) under
+"Sync & backfill". GitHub backfilled the first collection, and the RAILS
+cluster backfilled Collection 1.
+
+### Credentials
+
+A workflow that writes to Source Cooperative assumes a role by OIDC and reads
+its ARN from the repository variable `SOURCE_COOP_ROLE_ARN`. Source Cooperative
+provisions that role per organization, so the value changes with the published
+location and no workflow states it inline. Run `check-access` after setting it,
+which round-trips a marker object and fails with a named error when the
+variable is empty.
 
 ### Publish
 
@@ -263,8 +299,8 @@ python3 tools/publish.py --confirm  # upload; needs AWS credentials
 ```
 
 It never deletes. Removing a file from `catalog/` does not unpublish it, so
-delete the object yourself if that is what you meant. Data is staged at the
-`data_dir` set in `catalog.publish.yaml`. `tools/upload_data.py` uploads it,
+delete the object yourself when that is what you meant. Data is staged at the
+`data_dir` set in `catalog.publish.yaml`, and `tools/upload_data.py` uploads it
 with the same dry-run and `--confirm` flags.
 
 ### Test
@@ -275,36 +311,39 @@ CI_LIGHT=1 python3 tests/run_all.py
 
 | Gate | What it checks |
 |---|---|
-| `test_links.py` | Every relative link and asset href resolves |
+| `test_links.py` | Each relative link and asset href resolves |
+| `test_location.py` | Each URL points at the configured published location |
 | `test_publish.py` | Nothing outside `catalog/` can be uploaded |
 | `test_upload_data.py` | Only staged files with an allowed suffix upload |
 | `test_stac_valid.py` | Valid STAC 1.1.0, via `stac-check` |
 | `test_conformance.py` | Portolan conformance, via `rashid` |
 
-`CI_LIGHT=1` exempts asset hrefs with a data suffix from `test_links.py`,
-which is the normal case when the data bytes are not on this machine. Every
+`CI_LIGHT=1` exempts asset hrefs with a data suffix from `test_links.py`, which
+is the normal case when the data bytes are absent from this machine. Each
 structural link is still checked. The unit tests for the tools run under
-`CI_LIGHT=1 python3 -m pytest tests/ -q`. They need `duckdb`, and the build
-test needs `geoparquet-io==1.5.0` on the PATH, the version every workflow
-pins. `tools/s2_build.py` needs at least 1.4 for `--compression-level` and
-`--write-memory`.
+`CI_LIGHT=1 python3 -m pytest tests/ -q`. They need `duckdb`, the build test
+needs `geoparquet-io==1.5.0` on the PATH, and `tests/test_fetch.py` compares
+UTC instants, so run it with `TZ=UTC`. `tools/s2_build.py` needs
+`geoparquet-io` 1.4 or newer for `--compression-level` and `--write-memory`.
 
-CI runs `rashid`, `stac-check`, and `tests/run_all.py` on every pull request.
-`docs/conformance.md` records any accepted deviation, with the rule, why, and
-the tracking issue. The allow-list in `tests/test_conformance.py` never widens
-without a matching row there.
+CI runs `rashid`, `stac-check` and `tests/run_all.py` on each pull request.
+`docs/conformance.md` records any accepted deviation, with the rule, the reason
+and the tracking issue. The allow-list in `tests/test_conformance.py` never
+widens without a matching row there.
 
 ### Contributing
 
-Wrong metadata, a query that should be cheaper, a column that needs
-explaining: open an issue at
-https://github.com/taylor-geospatial/s2-stac-geoparquet/issues, or send a pull
-request against `catalog/`. CI runs the gates above on it.
+Open an issue at
+https://github.com/taylor-geospatial/s2-stac-geoparquet/issues for wrong
+metadata, a query that should be cheaper, or a column that needs explaining.
+Pull requests against `catalog/` are welcome, and CI runs the gates above on
+them.
 
 ## License
 
-Data: Sentinel-2 imagery and its derived products carry the
+Sentinel-2 imagery and its derived products fall under the
 [Copernicus Sentinel Data Terms and Conditions](https://sentinels.copernicus.eu/documents/247904/690755/Sentinel_Data_Legal_Notice),
-free, full, and open (SPDX `CC-BY-SA-3.0-IGO`). Contains modified Copernicus
-Sentinel data. See [`catalog/README.md`](catalog/README.md) for the citation
-the AWS Registry of Open Data asks for. Repository code: see `LICENSE`.
+which grant free, full and open access (SPDX `CC-BY-SA-3.0-IGO`). Contains
+modified Copernicus Sentinel data. See
+[`catalog/README.md`](catalog/README.md) for the citation the AWS Registry of
+Open Data asks for. For the repository code, see `LICENSE`.

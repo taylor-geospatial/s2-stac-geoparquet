@@ -95,7 +95,7 @@ def upload_env(env: dict[str, str], mint=None) -> dict[str, str]:
         return dict(env)
     mint = mint or (lambda: fresh_credentials(
         role, oidc_token(url, bearer),
-        env.get("S2_UPLOAD_SESSION_NAME") or "sentinel-2-catalog-upload-part",
+        env.get("S2_UPLOAD_SESSION_NAME") or "s2-stac-geoparquet-upload-part",
         env.get("AWS_REGION") or env.get("AWS_DEFAULT_REGION")))
     try:
         creds = mint()

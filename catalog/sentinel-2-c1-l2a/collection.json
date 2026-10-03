@@ -10,7 +10,7 @@
   ],
   "id": "sentinel-2-c1-l2a",
   "title": "Sentinel-2 Collection 1 L2A scenes (item index)",
-  "description": "The AWS Earth Search item index for Sentinel-2 Collection 1 L2A (ESA's reprocessing of the whole archive to one processing baseline), republished as one year-partitioned GeoParquet 2.0 table of 30,396,466 rows covering 2015 to 2026. One row per scene, carrying the whole STAC item: footprint, acquisition time, MGRS tile, cloud cover, the scene-classification percentages, the viewing and sun angles, `created`/`updated`, and the complete upstream `assets` object as a JSON string. Every Cloud-Optimized GeoTIFF URL is therefore in the table -- no API call, no URL template to guess -- while the imagery itself stays in the `e84-earth-search-sentinel-data` bucket on AWS. Collection 1 items carry no `s2:mgrs_tile`: the tile is `grid:code` (`MGRS-31UET`), and the bare id (`31UET`) is the added `_tile` column, THE spatial join key. Rows in every part are ordered by MGRS tile, then acquisition time, so one tile's year is one contiguous run and a tile-and-window query reads one or two row groups. Every year is one items.parquet, in uniform row groups of about 6,000 rows, so a tile's run is a small number of groups and a tile lookup reads only those. Any year may add live.parquet, the tail fetched daily since the last fold, which the periodic fold merges back into the year file. There is no zone= directory and no zone split: every part sits in year=YYYY/ and matches partition:glob. ESA's reprocessing is still running, so old years keep gaining scenes with recent `created` timestamps; the daily refresh looks back on `created`, not `datetime`, and appends what it finds to the year's live.parquet. Contains modified Copernicus Sentinel data. Read the [agent guide](AGENTS.md) before querying: `s2:dark_features_percentage` is NULL from processing baseline 05.11, `processing:software` and `assets` are JSON strings, not structs.",
+  "description": "The AWS Earth Search item index for Sentinel-2 Collection 1 L2A, republished as one year-partitioned GeoParquet 2.0 table. Collection 1 is ESA's reprocessing of the whole archive to a single processing baseline. The table holds 30,396,466 rows covering 2015 to 2026.\n\nEach row is one scene and carries the whole STAC item: footprint, acquisition time, MGRS tile, cloud cover, the scene-classification percentages, the viewing and sun angles, `created`/`updated`, and the complete upstream `assets` object as a JSON string. Every Cloud-Optimized GeoTIFF URL is therefore in the table, so a reader needs no API call and guesses no URL template. The imagery itself stays in the `e84-earth-search-sentinel-data` bucket on AWS.\n\nCollection 1 items carry no `s2:mgrs_tile`. The tile arrives as `grid:code` (`MGRS-31UET`), and the bare id (`31UET`) becomes the added `_tile` column. Join on `_tile`.\n\nRows in every part are ordered by MGRS tile, then acquisition time, so one tile's year forms a contiguous run. Each year is one `items.parquet` in uniform row groups of about 6,000 rows, which lets a tile-and-window query read one or two groups. Any year may add a `live.parquet`, the tail fetched daily since the last fold, which the periodic fold merges back into the year file. Every part sits in `year=YYYY/` and matches `partition:glob`, because the layout has no zone split and no `zone=` directory.\n\nESA's reprocessing is still running, so old years keep gaining scenes with recent `created` timestamps. The daily refresh therefore looks back on `created` rather than `datetime`, and appends what it finds to that year's `live.parquet`.\n\nContains modified Copernicus Sentinel data. Read the [agent guide](AGENTS.md) before you query. It records that `s2:dark_features_percentage` is NULL from processing baseline 05.11, and that `processing:software` and `assets` are JSON strings rather than structs.",
   "license": "CC-BY-SA-3.0-IGO",
   "keywords": [
     "sentinel-2",
@@ -44,7 +44,7 @@
       "url": "https://earth-search.aws.element84.com/v1"
     },
     {
-      "name": "Portolan Mirrors",
+      "name": "Taylor Geospatial",
       "description": "Republishes the Earth Search item index as partitioned STAC-GeoParquet.",
       "roles": [
         "processor",
@@ -83,7 +83,7 @@
     }
   ],
   "partition:file_count": 12,
-  "partition:glob": "s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-c1-l2a/year=*/*.parquet",
+  "partition:glob": "s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/year=*/*.parquet",
   "table:primary_geometry": "geometry",
   "table:row_count": 30396466,
   "table:columns": [
@@ -110,7 +110,7 @@
     {
       "name": "id",
       "type": "string",
-      "description": "Earth Search item id, e.g. S2B_T31UET_20260921T105030_L2A."
+      "description": "Earth Search item id, such as S2B_T31UET_20260921T105030_L2A."
     },
     {
       "name": "bbox",
@@ -160,7 +160,7 @@
     {
       "name": "grid:code",
       "type": "string",
-      "description": "MGRS grid code, e.g. MGRS-31UET. `_tile` is the bare id."
+      "description": "MGRS grid code, such as MGRS-31UET. `_tile` is the bare id."
     },
     {
       "name": "mgrs:utm_zone",
@@ -270,7 +270,7 @@
     {
       "name": "s2:processing_baseline",
       "type": "string",
-      "description": "e.g. 05.13."
+      "description": "such as 05.13."
     },
     {
       "name": "s2:product_uri",
@@ -290,7 +290,7 @@
     {
       "name": "s2:datatake_type",
       "type": "string",
-      "description": "e.g. INS-NOBS."
+      "description": "such as INS-NOBS."
     },
     {
       "name": "s2:datastrip_id",
@@ -365,7 +365,7 @@
     {
       "name": "_tile",
       "type": "string",
-      "description": "MGRS tile id from grid:code, e.g. 31UET. THE spatial join key and the first sort key; datetime is the second."
+      "description": "MGRS tile id from grid:code, such as 31UET. The spatial join key and the first sort key; datetime is the second."
     },
     {
       "name": "geometry",
@@ -525,7 +525,7 @@
     },
     "swir22": {
       "type": "image/tiff; application=geotiff; profile=cloud-optimized",
-      "title": "SWIR 2.2\u03bcm - 20m",
+      "title": "SWIR 2.2μm - 20m",
       "eo:bands": [
         {
           "name": "B12",
@@ -629,7 +629,7 @@
     },
     "swir16": {
       "type": "image/tiff; application=geotiff; profile=cloud-optimized",
-      "title": "SWIR 1.6\u03bcm - 20m",
+      "title": "SWIR 1.6μm - 20m",
       "eo:bands": [
         {
           "name": "B11",
@@ -889,6 +889,12 @@
       "href": "../catalog.json",
       "type": "application/json",
       "title": "Sentinel-2 L2A STAC-GeoParquet Mirror"
+    },
+    {
+      "rel": "related",
+      "href": "../stats-c1/collection.json",
+      "type": "application/json",
+      "title": "MGRS tile-month statistics over this index"
     },
     {
       "rel": "describedby",

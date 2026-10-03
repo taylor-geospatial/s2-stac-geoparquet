@@ -9,7 +9,7 @@
   ],
   "id": "stats-c1",
   "title": "MGRS coverage and cloud statistics (Collection 1)",
-  "description": "One row per MGRS tile per month, aggregated from the `sentinel-2-c1-l2a` item index (Sentinel-2 Collection 1, joined on its `_tile` column): scene count, minimum and median cloud cover, the least-cloudy scene of the month (its id and UTC date), and the mean and maximum percent of the tile its scenes fill (from `s2:nodata_pixel_percentage`; NULL where no scene carried it). Every percent is stored rounded to an integer 0-100. Three parquet products are cut from the same table: the full `mgrs-monthly.parquet` (sorted by tile, small row groups, so one tile's history is a range read), one `months/YYYY-MM.parquet` slice per month with the paint columns only, and `timeline.parquet` with one row per month over all tiles. This is the timeline/choropleth backend for the explorer app and the cheap first stop for \"which month has a cloud-free scene here\" -- no need to scan the full item archive to answer it. A companion PMTiles carries one polygon per MGRS tile (the envelope of that tile's scene footprints) so the app can join tile-month statistics onto a fixed geometry by `mgrs_tile` without the tileset ever changing on a daily stat refresh. Scenes whose bbox spans more than 20 degrees of longitude (antimeridian wraps) are excluded from the footprint polygons only; they are still counted in the monthly statistics. The table covers every month the mirrored Collection 1 index has published so far; table:row_count and the temporal extent are measured from the table at each publish, so they follow the backfill as it lands (0 rows and the source's extent before the first publish). The daily refresh looks back on `created` and recomputes every year its lookback touches, so a month can gain rows long after it ended as ESA's reprocessing fills old years in. Contains modified Copernicus Sentinel data.",
+  "description": "One row per MGRS tile per month, aggregated from the `sentinel-2-c1-l2a` item index (Sentinel-2 Collection 1, joined on its `_tile` column). Each row holds the scene count, the minimum and median cloud cover, and the least-cloudy scene of the month with its id and UTC date. It also holds the mean and maximum percent of the tile its scenes fill, taken from `s2:nodata_pixel_percentage` and NULL where no scene carried that property. Every percent is stored rounded to an integer 0-100.\n\nThree parquet products are cut from the same table. `mgrs-monthly.parquet` is the full table, sorted by tile in small row groups, so one tile's history is a range read. Each `months/YYYY-MM.parquet` is that table cut to one month, with the paint columns only. `timeline.parquet` carries one row per month over all tiles.\n\nThe collection answers \"which month has a cloud-free scene here\" without a scan of the full item archive, and it backs the timeline and the choropleth in the explorer app. A companion PMTiles carries one polygon per MGRS tile, the envelope of that tile's scene footprints. The app joins tile-month statistics onto that fixed geometry by `mgrs_tile`, so a daily stat refresh never rewrites the tileset.\n\nScenes whose bbox spans more than 20 degrees of longitude are antimeridian wraps. The footprint polygons exclude them, although the monthly statistics still count them.\n\nThe table reaches across the months the mirrored Collection 1 index covers. `table:row_count` and the temporal extent are measured from the table at each publish, so the published collection.json states what is there now and a committed copy can lag it. The daily refresh looks back on `created` and recomputes every year its lookback touches, so a month can gain rows long after it ended as ESA's reprocessing fills old years in. Contains modified Copernicus Sentinel data.",
   "license": "CC-BY-SA-3.0-IGO",
   "keywords": [
     "sentinel-2",
@@ -42,7 +42,7 @@
       "url": "https://earth-search.aws.element84.com/v1"
     },
     {
-      "name": "Portolan Mirrors",
+      "name": "Taylor Geospatial",
       "description": "Aggregates the mirrored Collection 1 item index into MGRS tile-month statistics and a tile-footprint PMTiles.",
       "roles": [
         "processor",
@@ -75,7 +75,7 @@
     {
       "name": "mgrs_tile",
       "type": "string",
-      "description": "MGRS tile id, e.g. 53HNV (the item index's `_tile` column). Join key against the mgrs.pmtiles feature id."
+      "description": "MGRS tile id, such as 53HNV (the item index's `_tile` column). Join key against the mgrs.pmtiles feature id."
     },
     {
       "name": "year",
@@ -188,6 +188,18 @@
       "href": "../catalog.json",
       "type": "application/json",
       "title": "Sentinel-2 L2A STAC-GeoParquet Mirror"
+    },
+    {
+      "rel": "preview",
+      "href": "https://research.taylorgeospatial.org/s2-stac-geoparquet/",
+      "type": "text/html",
+      "title": "Interactive scene explorer (timeline and choropleth)"
+    },
+    {
+      "rel": "related",
+      "href": "../sentinel-2-c1-l2a/collection.json",
+      "type": "application/json",
+      "title": "The item index these statistics aggregate"
     },
     {
       "rel": "describedby",

@@ -32,7 +32,7 @@ COLUMNS = [
     ("type", "VARCHAR", "Always 'Feature'."),
     ("stac_version", "VARCHAR", "STAC version of the source item."),
     ("stac_extensions", "VARCHAR[]", "Extension schema URIs of the source item."),
-    ("id", "VARCHAR", "Earth Search item id, e.g. S2C_53HNV_20260910_0_L2A."),
+    ("id", "VARCHAR", "Earth Search item id, such as S2C_53HNV_20260910_0_L2A."),
     ("bbox", "DOUBLE[]", "Item bounding box [w, s, e, n], CRS84."),
     ("links", "STRUCT(href VARCHAR, rel VARCHAR, title VARCHAR, \"type\" VARCHAR)[]",
      "Source item links (canonical et al.); paging links are stripped."),
@@ -41,7 +41,7 @@ COLUMNS = [
     ("platform", "VARCHAR", "sentinel-2a / sentinel-2b / sentinel-2c."),
     ("proj:epsg", "BIGINT", "UTM EPSG code of the scene grid."),
     ("instruments", "VARCHAR[]", "Always ['msi']."),
-    ("s2:mgrs_tile", "VARCHAR", "MGRS tile id, e.g. 53HNV. THE spatial join key."),
+    ("s2:mgrs_tile", "VARCHAR", "MGRS tile id, such as 53HNV. The spatial join key."),
     ("constellation", "VARCHAR", "Always 'sentinel-2'."),
     ("s2:granule_id", "VARCHAR", "ESA granule id. NULL on newer items."),
     ("eo:cloud_cover", "DOUBLE", "Scene cloud cover percentage, 0-100."),
@@ -50,13 +50,13 @@ COLUMNS = [
     ("s2:datastrip_id", "VARCHAR", "ESA datastrip id."),
     ("s2:product_type", "VARCHAR", "Always 'S2MSI2A'."),
     ("sat:orbit_state", "VARCHAR", "ascending/descending. NULL on newer items."),
-    ("s2:datatake_type", "VARCHAR", "e.g. INS-NOBS."),
+    ("s2:datatake_type", "VARCHAR", "such as INS-NOBS."),
     ("s2:generation_time", "VARCHAR", "Processing generation time; dedupe tiebreak."),
     ("sat:relative_orbit", "BIGINT", "Relative orbit number, parsed from product_uri when absent upstream."),
     ("s2:water_percentage", "DOUBLE", "Scene classification percentage."),
     ("s2:mean_solar_zenith", "DOUBLE", "Mean solar zenith angle; 90 - view:sun_elevation on newer items."),
     ("s2:mean_solar_azimuth", "DOUBLE", "Mean solar azimuth; view:sun_azimuth on newer items."),
-    ("s2:processing_baseline", "VARCHAR", "e.g. 05.11."),
+    ("s2:processing_baseline", "VARCHAR", "such as 05.11."),
     ("s2:snow_ice_percentage", "DOUBLE", "Scene classification percentage."),
     ("s2:vegetation_percentage", "DOUBLE", "Scene classification percentage."),
     ("s2:thin_cirrus_percentage", "DOUBLE", "Scene classification percentage."),
@@ -84,7 +84,7 @@ COLUMNS = [
 # a missing file rather than a rejected client. One constant, imported by
 # s2_fetch, s2_build, make_items and upload_part; this module has no
 # dependencies, so upload_part can import it without pulling duckdb in.
-USER_AGENT = ("sentinel-2-catalog-tools/1.0 "
+USER_AGENT = ("s2-stac-geoparquet-tools/1.0 "
               "(+https://github.com/taylor-geospatial/s2-stac-geoparquet)")
 
 # Everything normalize() emits: the two sort helpers are computed at build

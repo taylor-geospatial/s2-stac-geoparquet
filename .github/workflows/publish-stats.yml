@@ -92,7 +92,7 @@ jobs:
       COLLECTION: ${{ matrix.collection }}
       STATS_DIR: ${{ matrix.stats_dir }}
       LIVE_YEARS: ${{ matrix.live_years }}
-      BASE: https://data.source.coop/portolan-mirrors/sentinel-2-catalog/${{ matrix.collection }}
+      BASE: https://data.source.coop/tge-labs/s2-stac-geoparquet/${{ matrix.collection }}
       C1_LIVE_ENABLED: ${{ vars.C1_LIVE_ENABLED }}
     steps:
       - name: Check the catalog is published and this collection is enabled
@@ -102,7 +102,7 @@ jobs:
           if [ "$COLLECTION" = sentinel-2-c1-l2a ] && [ "$C1_LIVE_ENABLED" != true ]; then
             echo "::notice::C1_LIVE_ENABLED is not 'true'; nothing to build for $COLLECTION"
             echo "published=false" >> "$GITHUB_OUTPUT"
-          elif curl -fsI https://data.source.coop/portolan-mirrors/sentinel-2-catalog/catalog.json > /dev/null; then
+          elif curl -fsI https://data.source.coop/tge-labs/s2-stac-geoparquet/catalog.json > /dev/null; then
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::catalog not yet published; nothing to build stats from"
@@ -249,7 +249,7 @@ jobs:
         if: steps.guard.outputs.published == 'true'
         run: |
           set -euo pipefail
-          TIMELINE=https://data.source.coop/portolan-mirrors/sentinel-2-catalog/stats-c1/timeline.parquet
+          TIMELINE=https://data.source.coop/tge-labs/s2-stac-geoparquet/stats-c1/timeline.parquet
           python3 tools/make_stats_collection.py --collection "$COLLECTION" \
             --data-dir "./staging/publish/$STATS_DIR"
           for y in $(seq 2015 "$(date -u +%Y)"); do
@@ -299,7 +299,7 @@ jobs:
         if: steps.guard.outputs.published == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}-${{ matrix.stats_dir }}
           aws-region: us-west-2
 

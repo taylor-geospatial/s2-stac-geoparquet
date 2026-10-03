@@ -89,7 +89,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BASE: https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a
+  BASE: https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a
 
 jobs:
   plan:
@@ -106,7 +106,7 @@ jobs:
         id: guard
         run: |
           set -uo pipefail
-          if curl -fsI https://data.source.coop/portolan-mirrors/sentinel-2-catalog/catalog.json > /dev/null; then
+          if curl -fsI https://data.source.coop/tge-labs/s2-stac-geoparquet/catalog.json > /dev/null; then
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::catalog not yet published; nothing to refresh"
@@ -341,7 +341,7 @@ jobs:
       - name: Assume the Source Cooperative write role
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}
           aws-region: us-west-2
       # Upload order matters. The archive parts must land before the emptied

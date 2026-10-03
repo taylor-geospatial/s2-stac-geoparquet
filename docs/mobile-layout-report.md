@@ -4,8 +4,9 @@ Answers `docs/mobile-layout-brief.md`. Branch `s2-layout-exp`.
 
 ## The change
 
-Three files: `apps/explorer/index.html`, `style.css`, `app.js`. No new
-dependency, no new library, no build step.
+The change touches `apps/explorer/index.html`, `style.css` and `app.js`. It
+uses the libraries the page already loads, and the page still needs no build
+step.
 
 ### One container, two layouts
 
@@ -19,21 +20,22 @@ dependency, no new library, no build step.
       </div>
     </div>
 
-Nothing inside either panel moved and no id changed, so every `$("…")`
-lookup in `app.js`, `bands.js` and `cog.js` still finds what it found.
+The contents of both panels stayed where they were, and every id kept its
+name, so each `$("…")` lookup in `app.js`, `bands.js` and `cog.js` still
+finds what it found.
 
 On a desktop `#sheet` and `#sheetbody` are `display: contents` and `#grip`
 is `display: none`, so the two panels are laid out against the viewport
 exactly as before: the sidebar at the left, the image card 16 px from the
-map's lower right corner. This is why the wrapper could be added without
-touching the desktop rules.
+map's lower right corner. The wrapper went in without a change to the
+desktop rules.
 
 At the phone breakpoint — the same `@media (max-width: 760px)` the old
 rules used — `#sheet` becomes the one bottom sheet:
 
 * `#map` covers the whole viewport (`inset: 0`), and `body` cannot scroll.
 * `#sheet` is fixed to the bottom, full width, rounded at the top, with the
-  grab handle above a single scroller.
+  grab handle above one scroller.
 * `#imgpanel` is `position: static` inside that scroller, first, so the
   "Showing … Clear" bar and "Bands & stretch" render above the search
   controls. One sheet, never two.
@@ -64,11 +66,11 @@ while a finger is down.
 ### Showing a scene
 
 `showOnMap()` calls `setSnap("peek")` right after it writes the cogbar, so
-every way a scene reaches the map — the card's button, a band chip, and the
-clearest scene a finished search puts up by itself — drops the sheet to
+every route that puts a scene on the map — the card's button, a band chip,
+and the clearest scene a finished search draws by itself — drops the sheet to
 peek and leaves the "Showing …" line in view.
 
-Two smaller edits follow from that:
+That snap required two smaller edits:
 
 * `runQuery()` skips its `scrollIntoView` of the results when the sheet is
   at peek. Without this the search's own smooth scroll lands *after* the
@@ -90,7 +92,8 @@ keeps the desktop hero scroll in `runQuery()` working.
 Headless Chrome (Playwright's `chrome-headless-shell`, ANGLE + SwiftShader,
 the launch line `tools/rails/experiments/check_app.py` uses), driven over
 CDP against the real page served from this worktree, reading the real
-catalog on Source Cooperative. Three viewports: 390x844, 428x926, 1440x900.
+catalog on Source Cooperative. The viewports were 390x844, 428x926 and
+1440x900.
 
 | # | Check | Result |
 |---|-------|--------|
@@ -109,7 +112,7 @@ at both sizes).
 
 **2 — search, then show on map.** One map click at 5.5°E 52.0°N named tile
 31UFT; the search read 2 parts / 2 row groups and returned 14 scenes. The
-sheet was at `peek` the moment the cards landed (the page shows the
+sheet was at `peek` as soon as the cards rendered (the page shows the
 clearest scene itself), sheet top 816 px of 926, so 88 % of the screen is
 the scene. The cogbar reads "Showing S2A_T31UFT_20260915T103959_L2A on the
 map — Full resolution — Clear"; the id's box is at y = 857, inside the
@@ -132,7 +135,7 @@ sheet: 100 → 24, sheet height unchanged.
 **4 — the zoom buttons.** At every stop, at both phone sizes,
 `elementFromPoint` over the centre of `.maplibregl-ctrl-zoom-in` and
 `.maplibregl-ctrl-zoom-out` returns the control, and a click on zoom-in
-raises `map.getZoom()`. The controls sit at the map's top right and the
+raises `map.getZoom()`. The controls are at the map's top right and the
 sheet's top edge is 816 px (peek), 463 px (half) and 111 px (full) at
 428x926 — the buttons end at 68 px, clear at every stop. A drag across the
 map at half moved the centre from 10°E 30°N to 31.8°E 54.6°N, so the map

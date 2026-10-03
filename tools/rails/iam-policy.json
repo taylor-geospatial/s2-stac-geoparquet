@@ -8,7 +8,7 @@
       "Resource": "arn:aws:s3:::us-west-2.opendata.source.coop",
       "Condition": {
         "StringLike": {
-          "s3:prefix": "portolan-mirrors/sentinel-2-catalog/*"
+          "s3:prefix": "tge-labs/s2-stac-geoparquet/*"
         }
       }
     },
@@ -21,7 +21,7 @@
         "s3:AbortMultipartUpload",
         "s3:ListMultipartUploadParts"
       ],
-      "Resource": "arn:aws:s3:::us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog/*"
+      "Resource": "arn:aws:s3:::us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet/*"
     }
   ]
 }

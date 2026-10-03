@@ -1,4 +1,7 @@
+<!-- vale Portolan-Mechanics.Headings = NO -->
+<!-- The heading is a directory path, so it keeps its literal spelling. -->
 # tools/
+<!-- vale Portolan-Mechanics.Headings = YES -->
 
 The scripts that fetch, build, describe and publish the catalog. None of
 them is published; `catalog/` is. The root [README](../README.md) lists
@@ -22,7 +25,7 @@ cluster, and GitHub only appends its daily tail.
 |---|---|---|
 | Backfill | `backfill` then `publish-backfill` (GitHub) | `tools/rails/` on RAILS |
 | Daily tail | `refresh-daily`: `live.parquet` per year, zstd 18 | `refresh-daily`'s `refresh-c1` job, on when the repository variable `C1_LIVE_ENABLED` is `true`: `live-MM.parquet` per year and month, zstd 3, lookback on `created` |
-| Consolidation | `consolidate-month`, the 3rd of each month | `fold_live.sbatch` on RAILS, by hand, every 1 to 2 months |
+| Consolidation | `consolidate-month`, the third of each month | `fold_live.sbatch` on RAILS, by hand, every 1 to 2 months |
 | Repair | `repair-slices` (bucket crawl) | `repair_month.sbatch` |
 | Audit | `s2_audit.py` by hand | `audit_year.sbatch` |
 | Metadata | regenerated and published by each workflow | regenerated on a laptop, committed, `publish-catalog` |
@@ -59,7 +62,7 @@ gates, and publishes the metadata.
 per year from the previous live plus the slice, minus every id the year's
 archive parts hold (`--exclude-ids-from`), so live and archive never
 overlap. It splices those years into the stats table, restamps the two
-collections, validates, uploads and publishes. Nothing is committed. Its
+collections, validates, uploads and publishes, and commits nothing. Its
 Collection 1 job does the same per (year, month): see "The Collection 1
 lane" below.
 
@@ -82,7 +85,7 @@ the new parts), and publishes.
 - Artifacts expire after 30 days, and a matrix of 136 months at two in
   parallel takes days.
 - Runner evictions during long bucket crawls (11 of 11 `repair-slices`
-  attempts on one month), which is why the repair writes one chunk per day.
+  attempts on one month), so the repair writes one chunk per day.
 
 **To run Collection 1 on it instead** (if RAILS goes away), the edits are:
 
@@ -90,7 +93,7 @@ the new parts), and publishes.
    then writes years from 2019 as zone parts (`zone_parts_for`), the tile
    column already drives `zone_sql`, and `make_items.parts_for` discovers
    whichever candidates a year has, so the single-file years already
-   published stay valid.
+   published remain valid.
 2. `backfill.yml`: add a `collection` input, pass it as
    `s2_fetch.py --collection`, and name the artifacts
    `slice-c1-YYYY-MM` so the two collections' slices never collide.
@@ -107,7 +110,10 @@ the new parts), and publishes.
    header; nothing else changes, its live build already excludes the
    archive's ids.
 
+<!-- vale Portolan-Mechanics.Headings = NO -->
+<!-- RAILS is the cluster's name and "Collection 1" is ESA's product name. -->
 ### RAILS technique (Collection 1)
+<!-- vale Portolan-Mechanics.Headings = YES -->
 
 The full instructions, the credentials setup and every script are in
 [`tools/rails/README.md`](rails/README.md). The shape:
@@ -124,25 +130,32 @@ The full instructions, the credentials setup and every script are in
    to assume the Source Cooperative role (`role-trust-statement.json`);
    either way a `source-coop` profile in `~/.aws` on RAILS. Only the two
    upload jobs use it.
-5. **Run order**: smoke (`SMOKE=1`, one month under `_smoke/`) → 2017 end
-   to end → 2018 with the layout experiment → the array fetch of every
-   month (on `datetime`; note its start date) → the catch-up
-   (`catchup.sbatch --export=ALL,START=<that date>`: one fetch on
-   `created` from the array's start to today, folded to
-   `$SLICES/created-START_END.parquet`, which every build reads; it
-   holds what was created after each month's task ran, which the array
-   and the daily refresh both miss) → year builds smallest first
-   (`build_ready_years.sh`; a year built before the catch-up is rebuilt:
-   `rm` its `items.parquet`, `build_year` again) and uploads → audit per
-   year, repair and rebuild a short month → the metadata commit from a
-   laptop (`make_items.py` and `make_collection.py` with
-   `--collection sentinel-2-c1-l2a --remote-baseline`, the gates,
-   commit, `publish-catalog`, which restamps every collection from the
-   bucket before it uploads) → set the repository variable
-   `C1_LIVE_ENABLED` to `true`, on the day the catch-up ended, so its
-   window and the refresh's five-day lookback meet → dispatch
-   `publish-stats` (its Collection 1 entry runs only with the variable
-   set; it seeds `stats-c1`) → flip the explorer's default.
+5. **Run order**, in sequence:
+   1. Smoke: `SMOKE=1`, one month under `_smoke/`.
+   2. 2017, end to end.
+   3. 2018, with the layout experiment.
+   4. The array fetch of every month, windowed on `datetime`. Note the
+      date it starts.
+   5. The catch-up, `catchup.sbatch --export=ALL,START=<that date>`. It
+      runs one fetch on `created` from the array's start to today, folded
+      to `$SLICES/created-START_END.parquet`, which every build reads. It
+      picks up what was created after each month's task ran, which the
+      array and the daily refresh both miss.
+   6. Year builds, smallest first, through `build_ready_years.sh`, then
+      the uploads. Rebuild a year built before the catch-up: `rm` its
+      `items.parquet` and run `build_year` again.
+   7. An audit per year. Repair and rebuild a short month.
+   8. The metadata commit from a laptop: `make_items.py` and
+      `make_collection.py` with
+      `--collection sentinel-2-c1-l2a --remote-baseline`, the gates, the
+      commit, then `publish-catalog`, which restamps every collection
+      from the bucket before it uploads.
+   9. Set the repository variable `C1_LIVE_ENABLED` to `true`, on the day
+      the catch-up ended, so its window meets the refresh's five-day
+      lookback.
+   10. Dispatch `publish-stats`, whose Collection 1 entry runs only with
+       that variable set, to seed `stats-c1`.
+   11. Flip the explorer's default.
 6. **Daily**: `refresh-daily`'s `refresh-c1` job, on while
    `C1_LIVE_ENABLED` is `true`, fetches the lookback by
    `created` (so a scene ESA reprocessed last week, whatever its
@@ -189,12 +202,11 @@ committed copies over it. Start the fold after 04:00 UTC: one that
 crosses the refresh's 03:42 UTC rewrite of a live part loses that day's
 `created` slice from that part until the next lookback fetches it again.
 
-**If the fold is skipped**: the months keep growing (a whole year of tail
-is about 5 million rows at zstd 3 across up to twelve files, more and
-slower files than the year file would be, though each day's refresh still
-only rewrites the months it fetched); every query stays correct, because
-the year item lists every part and the collection glob reads them all; and
-the year file lags the truth by however long the fold is late, with
-reprocessed scenes present twice across the files (the newer
-`s2:generation_time` in the live part) until the fold dedupes them. Nothing is lost, and nothing else needs to change
-when the fold finally runs.
+**If the fold is skipped**, the months keep growing. A whole year of tail is
+about 5 million rows at zstd 3 across up to twelve files, which is more files
+and slower ones than the year file would be, although each day's refresh still
+rewrites only the months it fetched. A query still returns the right answer throughout, because the year item
+lists every part and the collection glob reads them all. The year file lags the truth by however long the fold is late,
+with reprocessed scenes present twice across the files, carrying the newer
+`s2:generation_time` in the live part, until the fold dedupes them. The fold
+recovers all of it when it finally runs, and no other step changes.

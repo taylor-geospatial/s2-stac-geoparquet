@@ -51,7 +51,7 @@ REPO = HERE.parent.parent.parent
 sys.path.insert(0, str(HERE))
 from layout_parts import octant_of, prefix_of, zone_of  # noqa: E402
 
-BASE = "https://data.source.coop/portolan-mirrors/sentinel-2-catalog"
+BASE = "https://data.source.coop/tge-labs/s2-stac-geoparquet"
 PUBLISHED = f"{BASE}/sentinel-2-c1-l2a"
 EXPERIMENT = f"{BASE}/_experiments/layout"
 TILE_COLUMN = "_tile"

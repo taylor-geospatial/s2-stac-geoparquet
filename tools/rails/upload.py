@@ -6,7 +6,7 @@ what the bucket already holds.
         --data-dir /u/cholmes/s2-c1/publish sentinel-2-c1-l2a/year=2019/items.parquet
 
 Why not tools/upload_data.py: it builds its session from the `profile`
-key of catalog.publish.yaml (`portolan-mirrors`, a laptop profile) unless
+key of catalog.publish.yaml (`tge-labs`, a laptop profile) unless
 AWS_ACCESS_KEY_ID is in the environment, and RAILS has neither -- its
 `[default]` profile is another account that gets AccessDenied on the
 catalog prefix. This script takes the profile from --profile or

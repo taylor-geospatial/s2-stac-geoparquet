@@ -62,7 +62,7 @@ const { MapboxOverlay, GeoJsonLayer, MVTLayer } = window.deck;
 // ?base=http://localhost:8081 points the whole app at a local publish tree,
 // which is how it is developed before the bucket is populated.
 export const BASE = new URLSearchParams(location.search).get("base")
-  ?? "https://data.source.coop/portolan-mirrors/sentinel-2-catalog";
+  ?? "https://data.source.coop/tge-labs/s2-stac-geoparquet";
 
 // The collections this page can show and what differs between them; the
 // rest — the stats products, the scene query, the COG reads — is the same
