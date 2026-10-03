@@ -1970,3 +1970,63 @@ def test_app_asks_only_for_the_months_the_window_touches():
         want = ["items", "live"] + [live_month_name(m)[:-len(".parquet")]
                                     for m in months]
         assert asked == want, (year, d0, d1, asked)
+
+
+def test_app_first_dates_match_the_published_extents():
+    """The explorer bounds its date slider with a hard-coded first day per
+    collection, because the page never reads collection.json. Pin each one
+    to the start of the temporal extent the collection publishes, so a
+    rebuilt extent cannot leave the slider opening on a day with no scenes.
+    `since`, the year the sub-header and the year select use, is derived
+    from the same string, so only the day is pinned here."""
+    import s2_collections as cols
+    js = (ROOT / "apps/explorer/app.js").read_text()
+    for name in cols.NAMES:
+        config = cols.get(name)
+        extent = json.loads(
+            (ROOT / "catalog" / config.catalog_dir / "collection.json").read_text())
+        oldest = extent["extent"]["temporal"]["interval"][0][0][:10]
+        start = js.index(f'  "{name}": {{')
+        entry = js[start:js.index("\n  }", start)]
+        assert f'firstDate: "{oldest}"' in entry, (name, oldest)
+    assert "c.since = Number(c.firstDate.slice(0, 4))" in js
+
+
+def test_app_clamps_every_window_to_the_searchable_days():
+    """No handle and no calendar may reach before the collection's first
+    scene or past today. The three clamps are lifted out of app.js and run
+    in node against the first collection's own first day."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    clamps = _app_snippet(
+        "clampDay", "const clampDay = (day) =>", "const yearEnd = (year) =>"
+        " clampWindow(`${year}-01-01`, `${year}-12-31`)[1];")
+    script = (
+        'const COL = { firstDate: "2016-11-01" };\n'
+        'const TODAY = "2026-10-02";\n'
+        + clamps
+        + "\nconsole.log(JSON.stringify({\n"
+        "  first: [yearStart(2016), yearEnd(2016)],\n"
+        "  whole: [yearStart(2020), yearEnd(2020)],\n"
+        "  current: [yearStart(2026), yearEnd(2026)],\n"
+        "  ahead: clampWindow('2027-01-01', '2027-12-31'),\n"
+        "  behind: clampWindow('2015-01-01', '2015-12-31'),\n"
+        "  month: clampWindow('2026-10-01', '2026-10-31'),\n"
+        "}));\n")
+    proc = subprocess.run([node, "--input-type=module", "-e", script],
+                          capture_output=True, text=True, cwd=ROOT)
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+    # The first year opens on the first scene, not on January 1.
+    assert got["first"] == ["2016-11-01", "2016-12-31"]
+    # A year between the two bounds is untouched.
+    assert got["whole"] == ["2020-01-01", "2020-12-31"]
+    # The current year ends today, not on December 31.
+    assert got["current"] == ["2026-01-01", "2026-10-02"]
+    # A span wholly outside the bounds collapses onto the nearest bound, and
+    # its start never passes its end.
+    assert got["ahead"] == ["2026-10-02", "2026-10-02"]
+    assert got["behind"] == ["2016-11-01", "2016-11-01"]
+    # The current month stops today as well.
+    assert got["month"] == ["2026-10-01", "2026-10-02"]
