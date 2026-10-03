@@ -228,7 +228,8 @@ const WANT = {
     url.searchParams.set("collection", sel.value);
     location.assign(url);
   });
-  $("title").textContent = COL.title;
+  // #title is the application name and is set in index.html. COL.title
+  // names the collection, which the select and the tip below carry.
   $("sub").textContent = `Scenes since ${COL.since}, read from static files. No API.`;
   $("sub-info").dataset.tip = `${COL.title} scenes since ${COL.since}. Every query on this `
     + "page is an HTTP range read against static GeoParquet on Source Cooperative. Each "

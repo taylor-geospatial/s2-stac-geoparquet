@@ -6,11 +6,12 @@
 <title>Sentinel-2 Explorer — Taylor Geospatial</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <!-- Two faces for the chrome. Space Grotesk takes the headings: the
-     institute sets its own in Gintronic, which is licensed per domain, and
+     Taylor Geospatial sets its own in Gintronic, which is licensed per
+     domain, and
      Space Grotesk is the nearest open face — the same warm geometric sans,
      and it holds its shape in the small uppercase labels this panel is full
      of. JetBrains Mono takes the figures and the scene ids, as the
-     institute's research pages do. The body text stays on the system face:
+     Taylor Geospatial research pages do. The body text stays on the system face:
      this is a dense control panel, and the system face needs no network.
      Each request names two weights, so the two files together are a few KB,
      and `display=swap` keeps the panel readable before they land. -->
@@ -101,10 +102,11 @@
     <svg class="brand-mark" viewBox="0 0 753.1 81.1" role="img"
       aria-label="Taylor Geospatial"><use href="#tg-wordmark"></use></svg>
   </a>
-  <!-- The header names the loaded collection; app.js fills the select from
-       its COLLECTIONS table, reads ?collection= and reloads on a change. -->
+  <!-- The header names the application. The collection in view is named
+       by the select below it, which app.js fills from its COLLECTIONS
+       table, reading ?collection= and reloading on a change. -->
   <div class="head">
-    <h1 id="title">Sentinel-2 L2A</h1>
+    <h1 id="title">CNG Sentinel-2</h1>
     <button id="about" class="mini" type="button" aria-label="About this page">About</button>
   </div>
   <label class="switch">Collection <select id="collection"></select></label>
@@ -215,7 +217,7 @@
     <linearGradient id="gi-ndwi"><stop offset="0" stop-color="#a6611a"/>
       <stop offset=".5" stop-color="#f5f5f5"/><stop offset="1" stop-color="#0571b0"/></linearGradient>
   </defs>
-  <!-- The Taylor Geospatial wordmark, from the institute's own one-line
+  <!-- The Taylor Geospatial wordmark, from their own one-line
        logo file. It carries no fill of its own, so every <use> of it paints
        in the ink colour of wherever it sits. -->
   <symbol id="tg-wordmark" viewBox="0 0 753.1 81.1" fill="currentColor">
@@ -257,22 +259,34 @@
   <button id="welcome-x" class="mini x" type="button" aria-label="Close">✕</button>
   <svg class="brand-mark" viewBox="0 0 753.1 81.1" role="img"
     aria-label="Taylor Geospatial"><use href="#tg-wordmark"></use></svg>
-  <h2 id="welcome-title">Sentinel-2 Explorer</h2>
-  <p>Find and view Sentinel-2 L2A scenes anywhere on Earth. Nothing on this
-     page calls an API. Every search is an HTTP range read against static
-     GeoParquet files on Source Cooperative. Every image is read from the
-     scene's Cloud-Optimized GeoTIFFs on AWS and drawn in your browser.</p>
-  <ol>
-    <li>The map colors each MGRS tile by its clearest scene in the year. Change
-        the year, or what the color shows, at the top of the panel.</li>
-    <li>Click a tile. Its scenes are listed in the panel and the clearest one
-        goes on the map.</li>
-    <li>Narrow the dates, the max cloud and the min coverage to filter the list.</li>
-    <li>Click a result card to show that scene. The icons on a card show it as
-        true color, NDVI, NDWI, false color or SWIR.</li>
-    <li>Step through the scenes with ‹ › and the scrub bar at the lower right.
-        Change the bands and the stretch there too.</li>
-  </ol>
+  <h2 id="welcome-title">CNG Sentinel-2</h2>
+  <p>Find and view Sentinel-2 imagery anywhere on Earth. This application
+     demonstrates that using
+     <a href="https://guide.cloudnativegeo.org/" target="_blank" rel="noopener">Cloud-Native
+     Geospatial</a> formats can match and even exceed the performance of most
+     satellite imagery search APIs. Search is performed by reading
+     <a href="https://geoparquet.org/" target="_blank" rel="noopener">GeoParquet</a>
+     and full resolution imagery exploration is provided by streaming
+     <a href="https://cogeo.org/" target="_blank" rel="noopener">COG</a>s. Both
+     are just files stored on the cloud, there is no server or API powering
+     anything you see.</p>
+  <p>This application should be considered a &lsquo;reference
+     implementation&rsquo; &mdash; anyone can use the
+     <a href="https://browser.portolan-sdi.org/#/external/data.source.coop/tge-labs/s2-stac-geoparquet/catalog.json"
+        target="_blank" rel="noopener">s2-stac-geoparquet dataset</a> (provided
+     as a <a href="https://portolan-sdi.org/" target="_blank" rel="noopener">Portolan
+     Catalog</a>) to power other applications or bulk data analysis, and the
+     <a href="https://github.com/taylor-geospatial/s2-stac-geoparquet"
+        target="_blank" rel="noopener">full source code</a> is available.</p>
+  <p>The default view enables exploration of the overall statistics of the full
+     set of Sentinel-2 tiles, easily visualizing cloud cover and coverage
+     throughout the world. Clicking a tile initiates the &lsquo;search&rsquo;,
+     and results can be sorted by coverage, cloud cover and recency. The side
+     panel enables scrubbing through the stack of imagery, initially with the
+     browser products, and then the full resolution views load. And zooming in
+     gets the full resolution data, with options for preset band
+     visualizations plus the ability to select custom bands and color
+     curves.</p>
   <form method="dialog"><button id="welcome-go" type="submit">Start exploring</button></form>
 </dialog>
 <!-- The shared info/hover popover: one box for every info button
