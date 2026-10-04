@@ -1755,8 +1755,19 @@ function currentView() {
   return viewRows;
 }
 
+// True from the first line of a search until its rows land or it gives up.
+// The count line is the one place a reader watches for the answer, so the
+// wait is reported there and not only in the results box.
+let searching = false;
+function paintCountWait() {
+  const box = $("rescount");
+  if (!searching) { box.textContent = ""; box.title = ""; return; }
+  box.replaceChildren(el("span", "spin"), el("span", "restime", "Searching…"));
+  box.title = "The page range-reads the year's item parts.";
+}
+
 function updateFilterStatus() {
-  if (!S.search) { $("rescount").textContent = ""; say(`${filterLine()}.`); return; }
+  if (!S.search) { paintCountWait(); say(`${filterLine()}.`); return; }
   // The mirror shows the request the page did not make, so it tracks the
   // filters the user sees, not the ones the last read ran under. A slider
   // drag rewrites it with the rest of the apply.
@@ -3451,6 +3462,13 @@ let searchSeq = 0;
 async function startSearch(tile, year, { flyFirst = true } = {}) {
   const seq = ++searchSeq;
   const box = $("results");
+  const panel = $("panel");
+  // Only the first search of a session lands the reader on Find scenes.
+  // After that the panel keeps the scroll it had: a click on another tile
+  // replaces the answer, and it should not also throw away the place the
+  // reader was in. Read both before S.search goes.
+  const resumed = Boolean(S.search);
+  const keepAt = panel.scrollTop;
   // The old search dies with the click that replaces it. It must not outlive
   // this line: an apply between here and the new rows would otherwise render
   // the previous tile-year's cards over the hint below, and a search that
@@ -3462,6 +3480,8 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   // run never reaches the success path below to start a fresh one (a query
   // error or an empty year both return early with no rows to warm).
   prefetchSeq++;
+  searching = true;
+  paintCountWait();
   box.replaceChildren(el("p", "hint", "Reading the item parts…"));
   $("sql").textContent = "Range-reading…";
   // The mirror while the read runs. updateFilterStatus keeps it current from
@@ -3475,12 +3495,16 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
     got = await yearRows(tile, year);
   } catch (err) {
     if (seq !== searchSeq) return;
+    searching = false;
+    paintCountWait();
     box.replaceChildren(el("p", "hint", `Query failed — ${err.message}`));
     say(`Could not read the item parts — ${err.message}`, true);
     return;
   }
   if (seq !== searchSeq) return;
   if (!got.urls.length) {
+    searching = false;
+    paintCountWait();
     $("sql").textContent = "";
     $("api").textContent = "";
     paintDuck(null);
@@ -3499,6 +3523,7 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   // prints. A cache hit reports what the await actually cost.
   const answeredIn = got.cached ? performance.now() - askedAt : got.ms;
   readMs.push(answeredIn);
+  searching = false;
   S.search = { tile, year, rows: got.rows, at: Date.now(),
     ms: answeredIn, cached: got.cached };
   S.shown = 15;
@@ -3507,15 +3532,20 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   renderResultsNow();
   scheduleApply({ nav: true });
   const view = currentView();
-  if (view.length) {
-    showIndex(0, flyFirst);
+  if (view.length) showIndex(0, flyFirst, !resumed);
+  if (resumed) {
+    // The card list went out and came back a different length, which can
+    // clamp the scroll. Put it back where the reader left it. showIndex
+    // did not scroll, so nothing competes with this.
+    panel.scrollTop = keepAt;
+  } else if (view.length && snap !== "peek") {
     // Land on the top of Find scenes, not on the top of the results. The
     // first thing a user does with a tile's scenes is narrow them, so the
     // dates and the three sliders have to be on screen with the list under
     // them. showIndex has just scrolled its own card into view; this runs
     // after it, so it is the scroll that settles. Not in peek, where the
     // sheet is collapsed and there is nothing to scroll.
-    if (snap !== "peek") $("query").scrollIntoView({ block: "start", behavior: "smooth" });
+    $("query").scrollIntoView({ block: "start", behavior: "smooth" });
   }
   // Fire-and-forget: warms the scrub stack outward from the shown scene.
   // Its own seq guard makes this safe to leave unawaited.
@@ -3530,7 +3560,9 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
 // except in peek, where the sheet is collapsed and there is nothing to see.
 // `fly` only frames the camera for the first result after a search; a step
 // or a scrub commit leaves the camera where the user left it (feedback 4).
-function showIndex(i, fly = false) {
+// `scroll` is false for the auto-show of a search that replaces an earlier
+// one, where startSearch restores the reader's own scroll instead.
+function showIndex(i, fly = false, scroll = true) {
   const view = currentView();
   const row = view[i];
   if (!row) return;
@@ -3540,7 +3572,7 @@ function showIndex(i, fly = false) {
   showOnMap(row, null, ui.preset, null, fly);
   renderResultsNow();
   scheduleApply({ nav: true });
-  if (snap !== "peek") {
+  if (scroll && snap !== "peek") {
     cardNodes.get(row.id)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
   // No neighbour-only prefetch here: prefetchScrubStack already covers the

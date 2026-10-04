@@ -361,9 +361,16 @@ button.mini:not(:disabled):hover { background: #43362e; }
   content: ""; width: 10px; height: 10px; border-radius: 50%; flex: none;
   background: #1a9850;
 }
-#cog-state[data-state="loading"]::before {
+#cog-state[data-state="loading"]::before, .spin {
   background: none; border: 2px solid #4a3c33; border-top-color: var(--accent);
   animation: cog-spin .8s linear infinite;
+}
+/* The same ring on the count line, where a reader waits for the answer.
+   Inline, not flex: .restime carries a leading space, and a flex line box
+   trims it. */
+.spin {
+  display: inline-block; vertical-align: -1px; width: 10px; height: 10px;
+  border-radius: 50%; margin-right: 6px;
 }
 #cog-state[data-state="partial"]::before { background: #f4a261; }
 @keyframes cog-spin { to { transform: rotate(360deg); } }
