@@ -585,3 +585,9 @@ button.mini:not(:disabled):hover { background: #43362e; }
   padding: 2px 8px; color: var(--accent); border-color: var(--line);
 }
 .scene .mini.strip:hover { color: var(--brand); border-color: var(--brand); }
+
+/* A control the strip view has nothing for. Dimmed rather than hidden, so
+   the panel keeps its shape and the reader sees why it does not respond. */
+#imgprev.off, #imgnext.off, #zoomto.off, #imgscrub.off {
+  opacity: .35; pointer-events: none;
+}

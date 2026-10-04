@@ -302,8 +302,12 @@ const WHOLE_PART_GROUPS = 40;
 //
 // `onBatch` receives the rows of each part as that part finishes, so the
 // page can draw the strip while the rest is still in flight.
+// `inner` is the radius already read. A march widens in steps, and each
+// step reads only the groups it adds, so marching out to a radius costs
+// what reading that radius once would have cost.
 export async function stripRows({ urls, tileColumn, tile, datastrip,
-                                  radius = 20, sidecars = true, onBatch }) {
+                                  radius = 20, inner = 0, sidecars = true,
+                                  onBatch }) {
   const tally = { parts: 0, groups: 0, gets: 0, bytes: 0, misses: 0, absent: 0 };
   const t0 = performance.now();
   const out = [];
@@ -319,7 +323,8 @@ export async function stripRows({ urls, tileColumn, tile, datastrip,
     // anchor, so it contributes nothing.
     let pick;
     if (meta.groups.length <= WHOLE_PART_GROUPS) {
-      pick = meta.groups;
+      // A small part is read whole on the first step, and never again.
+      pick = inner > 0 ? [] : meta.groups;
     } else {
       const home = meta.groups.findIndex((g) => {
         const lo = g.tileMin ?? decodeStat(
@@ -330,7 +335,14 @@ export async function stripRows({ urls, tileColumn, tile, datastrip,
       });
       if (home < 0) return;
       const { lo, hi } = groupWindow(meta.groups.length, home, radius);
-      pick = meta.groups.slice(lo, hi + 1);
+      const prev = inner > 0
+        ? groupWindow(meta.groups.length, home, inner)
+        : null;
+      pick = [];
+      for (let i = lo; i <= hi; i++) {
+        if (prev && i >= prev.lo && i <= prev.hi) continue;   // already read
+        pick.push(meta.groups[i]);
+      }
     }
 
     const raw = await readGroups(meta, url, pick, tileColumn, tally);

@@ -2574,6 +2574,8 @@ function imageCover() {
 }
 let zoomtoOn = false;
 function syncZoomTo() {
+  // The strip dims this control, and a camera frame must not undim it.
+  if (strip) { zoomtoOn = false; $("zoomto").disabled = true; return; }
   if (!shown) { zoomtoOn = false; $("zoomto").disabled = true; return; }
   const { seen, fills } = imageCover();
   // A camera loses the scene in two ways. It pans or zooms in until most of
@@ -2611,6 +2613,17 @@ $("imgprev").addEventListener("click", () => stepImage(-1));
 $("imgnext").addEventListener("click", () => stepImage(1));
 
 function syncNavButtons() {
+  // A strip is one pass across many tiles, not a stack over one, so there
+  // is nothing to step through. The controls stay in place and dimmed, so
+  // the panel keeps its shape and the reason is visible.
+  if (strip) {
+    setScrubEnabled(false);
+    $("imgnav").hidden = !shown;
+    setTip($("imgprev"), "");
+    setTip($("imgnext"), "");
+    return;
+  }
+  setScrubEnabled(true);
   const view = currentView();
   const at = shown ? indexOfId(view, S.displayedId) : -1;
   const pos = at >= 0 ? at : clampIndex(view, S.detachedAt);
@@ -2769,6 +2782,9 @@ function paintScrubTrack() {
 let prefetchSeq = 0;
 async function prefetchScrubStack() {
   const seq = ++prefetchSeq;
+  // A strip disables the scrub, so there is no stack to warm, and warming
+  // one would pull a preview for every scene of the pass.
+  if (strip) return;
   const view = currentView();
   if (!view.length || !S.search) return;
   const at = Math.max(0, indexOfId(view, S.displayedId));
@@ -3762,20 +3778,54 @@ function maybeAutoShowStrip() {
 // scenes and 5.6 MB, 80 reads 161 groups for 169 scenes and 22 MB, and the
 // whole part is 238 scenes and 86 MB. The ceiling stops the button before
 // a reader asks the page for all of it.
-const STRIP_RADIUS_0 = 20;
+// The first step is small so the pass appears quickly, and the march
+// doubles from there. Each step reads only the groups it adds, so the
+// march costs what one read at the final radius would have cost.
+const STRIP_RADIUS_0 = 7;
 const STRIP_RADIUS_MAX = 160;
+// Long enough for fitStrip's 700 ms ease to land before the next step
+// moves the camera again.
+const STRIP_STEP_PAUSE = 900;
+
+// The pass speaks through the image panel's state line, where a single
+// scene would otherwise report its own resolution.
+function stripStatus(text, state = "loading") {
+  const n = $("cog-state");
+  if (!n) return;
+  n.dataset.state = state;
+  n.textContent = text;
+  $("cogbar").hidden = false;
+  $("imgpanel").hidden = false;
+}
+
+// The scrub walks one stack of one tile. A pass is a different axis and
+// hundreds of scenes, and its prefetch would pull a preview for each, so
+// the control goes quiet while a strip is open.
+function setScrubEnabled(on) {
+  for (const id of ["imgprev", "imgscrub", "imgnext", "zoomto"]) {
+    const n = $(id);
+    if (!n) continue;
+    n.disabled = !on;
+    n.classList.toggle("off", !on);
+  }
+}
 
 // Read the pass at the current radius and fold what arrives into the view.
 // Each part draws as it lands, so the map grows outward while the rest is
 // still in flight.
 async function readStrip() {
   const { tile, year } = S.search;
+  const more = strip.radius < STRIP_RADIUS_MAX;
   strip.loading = true;
   scheduleApply({ cards: true });
+  stripStatus(S.search.rows.length
+    ? `${S.search.rows.length} scenes of this pass — reading further along it…`
+    : "Reading this pass…");
   const urls = await partUrls(`${year}-01-01`, `${year}-12-31`, tile);
   const got = await stripRows({
     urls, tileColumn: COL.tileColumn, tile, datastrip: strip.datastrip,
-    radius: strip.radius, sidecars: COL.sidecars !== false,
+    radius: strip.radius, inner: strip.read ?? 0,
+    sidecars: COL.sidecars !== false,
     onBatch: (batch) => {
       if (!strip) return;                     // the reader outlived the view
       S.search.rows = mergeStrip(S.search.rows, batch);
@@ -3783,19 +3833,39 @@ async function readStrip() {
       stripLayers = stripLayersFor(S.search.rows);
       fitStrip(S.search.rows);
       render();
+      stripStatus(`${S.search.rows.length} scenes of this pass`
+        + (more ? " — reading further along it…" : "…"));
       scheduleApply({ cards: true, nav: true });
     },
   });
   if (!strip) return;
   strip.loading = false;
+  strip.read = strip.radius;
   $("sql").textContent = got.plan;
-  say(`${S.search.rows.length} scenes on this pass, across `
-    + `${new Set(S.search.rows.map((r) => r.tile)).size} tiles.`);
+  const n = S.search.rows.length;
+  const tiles = new Set(S.search.rows.map((r) => r.tile)).size;
+  stripStatus(more
+    ? `${n} scenes over ${tiles} tiles — reading further along the pass…`
+    : `${n} scenes over ${tiles} tiles on this pass.`, more ? "loading" : "ok");
+  say(`${n} scenes on this pass, across ${tiles} tiles.`);
   scheduleApply({ cards: true, nav: true });
+}
+
+// Widen on a timer until the pass is in, pausing between steps so each
+// camera move reads as one. Leaving the strip ends the march, and so does
+// a manual widen, which takes over the next step.
+async function marchStrip(seq) {
+  while (strip && strip.march === seq && strip.radius < STRIP_RADIUS_MAX) {
+    await new Promise((r) => setTimeout(r, STRIP_STEP_PAUSE));
+    if (!strip || strip.march !== seq) return;
+    strip.radius = Math.min(STRIP_RADIUS_MAX, strip.radius * 2);
+    await readStrip();
+  }
 }
 
 async function widenStrip() {
   if (!strip || strip.loading || strip.radius >= STRIP_RADIUS_MAX) return;
+  strip.march = null;                 // the reader asked, so stop the timer
   strip.radius = Math.min(STRIP_RADIUS_MAX, strip.radius * 2);
   const before = S.search.rows.length;
   await readStrip();
@@ -3813,7 +3883,9 @@ async function enterStrip(row) {
     day: row.day,
     anchorId: row.id,
     radius: STRIP_RADIUS_0,
+    read: 0,
     loading: false,
+    march: 1,
     saved: { rows: S.search.rows, from: S.from, to: S.to },
   };
   // The pass happened on one day, so the window collapses to it. The
@@ -3828,6 +3900,7 @@ async function enterStrip(row) {
   stripLayers = [];
   say(`Reading the pass ${row.datastrip} …`);
   await readStrip();
+  if (strip && strip.march === 1) marchStrip(1);
 }
 
 function exitStrip() {
