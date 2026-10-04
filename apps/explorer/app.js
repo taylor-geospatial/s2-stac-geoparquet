@@ -858,8 +858,12 @@ map.on("mousemove", (e) => {
     hoverFrame = 0;
     // .wrap(): on a world copy past ±180 the index is still in -180..180.
     setHovered(hoverAt ? hitIndex.at(hoverAt.wrap().lng, hoverAt.lat) : null);
+    maybeAutoShowStrip();
   });
 });
+// Zooming counts as much as moving the pointer: the scene under a still
+// cursor grows past the threshold when the camera comes in.
+map.on("moveend", () => maybeAutoShowStrip());
 map.on("mouseout", () => { hoverAt = null; setHovered(null); });
 
 function repaint() { paintKey++; render(); }
@@ -1406,6 +1410,15 @@ function widerWindow() {
 // each call site wires its own click listener to widenWindow.
 function widenButton() {
   if (!S.search) return null;
+  // A strip has no date window left to widen: it already collapsed to the
+  // day of the pass. The same button reads further along the pass instead.
+  if (strip) {
+    if (strip.radius >= STRIP_RADIUS_MAX || strip.loading) return null;
+    const b = el("button", "mini", "Show more — widen the pass");
+    b.id = "more";
+    b.type = "button";
+    return b;
+  }
   const next = widerWindow();
   if (!next) return null;
   const label = next.from !== S.from ? monthYearLabel(next.from) : monthYearLabel(next.to);
@@ -1420,6 +1433,7 @@ function widenButton() {
 // re-filters and repaints from cache — no new read. A month lock is dropped
 // first: the widened window is no longer one calendar month.
 function widenWindow() {
+  if (strip) { widenStrip(); return; }
   const next = widerWindow();
   if (!next) return;
   S.monthLock = null;
@@ -1805,7 +1819,20 @@ function firstTileDefaults() {
 }
 
 map.on("click", (e) => {
-  const tile = hitIndex.at(e.lngLat.wrap().lng, e.lngLat.lat)?.tile;
+  const lng = e.lngLat.wrap().lng, lat = e.lngLat.lat;
+  // In a strip, a click inside the pass picks that scene and stays. A
+  // click anywhere else is a request for a different tile, so the strip
+  // closes and the ordinary stack of that tile opens.
+  if (strip) {
+    const r = stripSceneAt(lng, lat);
+    if (r) {
+      const at = indexOfId(currentView(), r.id);
+      if (at >= 0) showIndex(at, false); else showOnMap(r, null, ui.preset);
+      return;
+    }
+    exitStrip();
+  }
+  const tile = hitIndex.at(lng, lat)?.tile;
   if (!TILE_RE.test(tile ?? "")) return;
   firstTileDefaults();
   selectTile(tile);
@@ -3683,13 +3710,110 @@ function fitStrip(rows) {
   map.fitBounds([[w, s0], [e, n]], { padding: 40, duration: 700 });
 }
 
+// The strip scene under a point, or null. Scenes overlap at tile edges,
+// so the nearest centre wins.
+function stripSceneAt(lng, lat) {
+  if (!strip) return null;
+  let best = null, bestD = Infinity;
+  for (const r of S.search.rows) {
+    const b = r.bbox;
+    if (!b || b.length !== 4) continue;
+    if (lng < b[0] || lng > b[2] || lat < b[1] || lat > b[3]) continue;
+    const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+    const d = (lng - cx) ** 2 + (lat - cy) ** 2;
+    if (d < bestD) { bestD = d; best = r; }
+  }
+  return best;
+}
+
+// How much of the viewport a bbox covers, 0 to 1, clipped to the canvas.
+function screenFractionOf(bbox) {
+  const canvas = map.getCanvas();
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  if (!cw || !ch) return 0;
+  const a = map.project([bbox[0], bbox[1]]);
+  const b = map.project([bbox[2], bbox[3]]);
+  const w = Math.max(0, Math.min(cw, Math.max(a.x, b.x)) - Math.max(0, Math.min(a.x, b.x)));
+  const h = Math.max(0, Math.min(ch, Math.max(a.y, b.y)) - Math.max(0, Math.min(a.y, b.y)));
+  return (w * h) / (cw * ch);
+}
+
+// Zoom far enough into one scene of a strip and it becomes the subject.
+// Past half the viewport the page loads it at full resolution, which is
+// what a click on it would have done. The rest of the strip stays drawn.
+const STRIP_AUTOSHOW = 0.5;
+let autoShown = null;
+function maybeAutoShowStrip() {
+  if (!strip || !hoverAt) { autoShown = null; return; }
+  const r = stripSceneAt(hoverAt.wrap().lng, hoverAt.lat);
+  if (!r || screenFractionOf(r.bbox) <= STRIP_AUTOSHOW) {
+    autoShown = null;
+    return;
+  }
+  if (autoShown === r.id || shown?.r?.id === r.id) return;
+  autoShown = r.id;
+  // No fly: the reader is already looking at it.
+  const at = indexOfId(currentView(), r.id);
+  if (at >= 0) showIndex(at, false); else showOnMap(r, null, ui.preset, null, false);
+}
+
+// How far either side of the clicked scene's row group to read, and the
+// ceiling. Measured on the 2026 archive part: 20 reads 41 groups for 101
+// scenes and 5.6 MB, 80 reads 161 groups for 169 scenes and 22 MB, and the
+// whole part is 238 scenes and 86 MB. The ceiling stops the button before
+// a reader asks the page for all of it.
+const STRIP_RADIUS_0 = 20;
+const STRIP_RADIUS_MAX = 160;
+
+// Read the pass at the current radius and fold what arrives into the view.
+// Each part draws as it lands, so the map grows outward while the rest is
+// still in flight.
+async function readStrip() {
+  const { tile, year } = S.search;
+  strip.loading = true;
+  scheduleApply({ cards: true });
+  const urls = await partUrls(`${year}-01-01`, `${year}-12-31`, tile);
+  const got = await stripRows({
+    urls, tileColumn: COL.tileColumn, tile, datastrip: strip.datastrip,
+    radius: strip.radius, sidecars: COL.sidecars !== false,
+    onBatch: (batch) => {
+      if (!strip) return;                     // the reader outlived the view
+      S.search.rows = mergeStrip(S.search.rows, batch);
+      S.search.at = Date.now();   // a new row set, so the view memo re-runs
+      stripLayers = stripLayersFor(S.search.rows);
+      fitStrip(S.search.rows);
+      render();
+      scheduleApply({ cards: true, nav: true });
+    },
+  });
+  if (!strip) return;
+  strip.loading = false;
+  $("sql").textContent = got.plan;
+  say(`${S.search.rows.length} scenes on this pass, across `
+    + `${new Set(S.search.rows.map((r) => r.tile)).size} tiles.`);
+  scheduleApply({ cards: true, nav: true });
+}
+
+async function widenStrip() {
+  if (!strip || strip.loading || strip.radius >= STRIP_RADIUS_MAX) return;
+  strip.radius = Math.min(STRIP_RADIUS_MAX, strip.radius * 2);
+  const before = S.search.rows.length;
+  await readStrip();
+  if (!strip) return;
+  const gained = S.search.rows.length - before;
+  say(gained
+    ? `${gained} more scene(s) of the pass.`
+    : "No more scenes of this pass within reach.");
+}
+
 async function enterStrip(row) {
   if (!S.search || !row.datastrip) return;
-  const { tile, year } = S.search;
   strip = {
     datastrip: row.datastrip,
     day: row.day,
     anchorId: row.id,
+    radius: STRIP_RADIUS_0,
+    loading: false,
     saved: { rows: S.search.rows, from: S.from, to: S.to },
   };
   // The pass happened on one day, so the window collapses to it. The
@@ -3703,32 +3827,14 @@ async function enterStrip(row) {
   cardNodes = new Map();
   stripLayers = [];
   say(`Reading the pass ${row.datastrip} …`);
-
-  const urls = await partUrls(`${year}-01-01`, `${year}-12-31`, tile);
-  const got = await stripRows({
-    urls, tileColumn: COL.tileColumn, tile, datastrip: row.datastrip,
-    radius: 20, sidecars: COL.sidecars !== false,
-    onBatch: (batch) => {
-      if (!strip) return;                     // the reader outlived the view
-      S.search.rows = mergeStrip(S.search.rows, batch);
-      S.search.at = Date.now();   // a new row set, so the view memo re-runs
-      stripLayers = stripLayersFor(S.search.rows);
-      fitStrip(S.search.rows);
-      render();
-      scheduleApply({ cards: true, nav: true });
-    },
-  });
-  if (!strip) return;
-  $("sql").textContent = got.plan;
-  say(`${S.search.rows.length} scenes on this pass, across `
-    + `${new Set(S.search.rows.map((r) => r.tile)).size} tiles.`);
-  scheduleApply({ cards: true, nav: true });
+  await readStrip();
 }
 
 function exitStrip() {
   if (!strip) return;
   const { saved } = strip;
   strip = null;
+  autoShown = null;
   stripLayers = [];
   S.search.rows = saved.rows;
   S.search.at = Date.now();
