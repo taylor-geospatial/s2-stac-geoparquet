@@ -21,11 +21,17 @@
 // the page's other CDN imports.
 import { parquetMetadata, parquetReadObjects } from "https://cdn.jsdelivr.net/npm/hyparquet@1.31.1/+esm";
 import { compressors } from "https://cdn.jsdelivr.net/npm/hyparquet-compressors@1.1.2/+esm";
+import { groupWindow } from "./results.js";
 
 // The columns a search decodes — the card fields plus the filter columns.
 // `assets` (half the bytes of a part) is never among them.
+// `s2:datastrip_id` is here for the strip view: a card cannot offer "view
+// strip" without knowing which pass its scene belongs to. It costs about
+// 11 KiB per row group, so roughly a tenth of a normal search, and it saves
+// a second read of the clicked scene's group when the view opens.
 const SEARCH_COLUMNS = ["id", "datetime", "eo:cloud_cover",
-  "s2:nodata_pixel_percentage", "thumbnail_url", "bbox", "s2:processing_baseline"];
+  "s2:nodata_pixel_percentage", "thumbnail_url", "bbox", "s2:processing_baseline",
+  "s2:datastrip_id"];
 
 // At most this many chunk fetches in flight per search. An HTTP/2 connection
 // multiplexes them; the cap only keeps a many-group search (a live part with
@@ -248,6 +254,115 @@ async function searchPart(url, tileColumn, tile, tally, sidecars) {
 
 async function searchPartWith(meta, url, tileColumn, tile, tally) {
   const groups = admittedGroups(meta, tileColumn, tile);
+  const raw = await readGroups(meta, url, groups, tileColumn, tally);
+  // A group is admitted on its tile range, so it carries neighbouring
+  // tiles too. The row filter is what makes the answer exact.
+  return raw.filter((r) => r[tileColumn] === tile);
+}
+
+// One decoded parquet row, shaped the way the page uses it. A null or
+// unparseable datetime makes `t` NaN, and new Date(NaN).toISOString()
+// throws, which would reject a whole read over one bad row. Such a row
+// returns null and the caller drops it: it has no place on a timeline and
+// no window can admit it.
+function toRow(r, tileColumn) {
+  const t = r.datetime instanceof Date ? r.datetime.getTime() : Date.parse(r.datetime);
+  if (!Number.isFinite(t)) return null;
+  const nodata = Number(r["s2:nodata_pixel_percentage"]);
+  return {
+    id: r.id,
+    ts: new Date(t).toISOString().slice(0, 19) + "Z",
+    day: new Date(t).toISOString().slice(0, 10),
+    t,
+    cloud: Number(r["eo:cloud_cover"]),
+    cover: Number.isFinite(nodata) ? 100 - nodata : null,
+    thumbnail_url: r.thumbnail_url,
+    bbox: Array.from(r.bbox ?? []),
+    baseline: r["s2:processing_baseline"],
+    datastrip: r["s2:datastrip_id"] ?? null,
+    tile: tileColumn ? r[tileColumn] : undefined,
+  };
+}
+
+// A part small enough to read whole rather than window into. The live parts
+// of a year are this size, and a recent pass lives entirely in them: the
+// 2026 live parts together cost 4.3 MB across the search columns, against
+// 86 MB to read the archive part whole.
+const WHOLE_PART_GROUPS = 40;
+
+// Every scene of one satellite pass, streamed.
+//
+// A pass crosses hundreds of tiles, so there is no tile to admit groups by,
+// and the datetime statistics cannot help: a row group of a tile-sorted part
+// spans 258 days on average, where a pass lasts 690 seconds. What does work
+// is position. Tile names sort by UTM zone, a pass crosses a run of zones,
+// and so a pass occupies a contiguous band of row groups. `radius` is how
+// far either side of the clicked scene's group to read. Widening it walks
+// further along the pass.
+//
+// `onBatch` receives the rows of each part as that part finishes, so the
+// page can draw the strip while the rest is still in flight.
+// `inner` is the radius already read. A march widens in steps, and each
+// step reads only the groups it adds, so marching out to a radius costs
+// what reading that radius once would have cost.
+export async function stripRows({ urls, tileColumn, tile, datastrip,
+                                  radius = 20, inner = 0, sidecars = true,
+                                  onBatch }) {
+  const tally = { parts: 0, groups: 0, gets: 0, bytes: 0, misses: 0, absent: 0 };
+  const t0 = performance.now();
+  const out = [];
+
+  await Promise.all(urls.map(async (url) => {
+    const meta = await partMeta(url, sidecars).catch(() => ({ absent: true }));
+    if (meta.absent || !meta.groups?.length) {
+      tally.absent += 1;
+      return;
+    }
+    // A small part is read whole. A large one is read around the clicked
+    // scene, and if the part does not hold that tile at all there is no
+    // anchor, so it contributes nothing.
+    let pick;
+    if (meta.groups.length <= WHOLE_PART_GROUPS) {
+      // A small part is read whole on the first step, and never again.
+      pick = inner > 0 ? [] : meta.groups;
+    } else {
+      const home = meta.groups.findIndex((g) => {
+        const lo = g.tileMin ?? decodeStat(
+          g.chunks.find((c) => c.column === tileColumn)?.stats?.min_value);
+        const hi = g.tileMax ?? decodeStat(
+          g.chunks.find((c) => c.column === tileColumn)?.stats?.max_value);
+        return lo != null && hi != null && lo <= tile && tile <= hi;
+      });
+      if (home < 0) return;
+      const { lo, hi } = groupWindow(meta.groups.length, home, radius);
+      const prev = inner > 0
+        ? groupWindow(meta.groups.length, home, inner)
+        : null;
+      pick = [];
+      for (let i = lo; i <= hi; i++) {
+        if (prev && i >= prev.lo && i <= prev.hi) continue;   // already read
+        pick.push(meta.groups[i]);
+      }
+    }
+
+    const raw = await readGroups(meta, url, pick, tileColumn, tally);
+    const mine = raw.map((r) => toRow(r, tileColumn)).filter(Boolean)
+      .filter((r) => r.datastrip === datastrip);
+    out.push(...mine);
+    if (mine.length && onBatch) onBatch(mine);
+  }));
+
+  const ms = performance.now() - t0;
+  const plan = "strip read (no SQL engine, no API):\n"
+    + `  ${tally.parts} part(s), ${tally.groups} row group(s) around ${tile}\n`
+    + `  ${tally.gets} parallel range GETs, ${(tally.bytes / 1024).toFixed(0)} KiB,`
+    + ` ${fmtSecs(ms)}`;
+  return { rows: out, plan, ms };
+}
+
+// Fetch and decode a chosen set of row groups. The tile search and the
+// strip read differ only in how they choose the groups.
+async function readGroups(meta, url, groups, tileColumn, tally) {
   if (!groups.length) return [];
   tally.parts += 1;
   tally.groups += groups.length;
@@ -269,9 +384,10 @@ async function searchPartWith(meta, url, tileColumn, tile, tally) {
   const file = regionBuffer(url, meta.size, regions, tally,
     meta.fromSidecar ? meta.size : undefined);
   const parts = await Promise.all(groups.map((g) => parquetReadObjects({
-    file, metadata: meta.metadata, compressors, columns, rowStart: g.row0, rowEnd: g.row1,
+    file, metadata: meta.metadata, compressors, columns,
+    rowStart: g.row0, rowEnd: g.row1,
   })));
-  return parts.flat().filter((r) => r[tileColumn] === tile);
+  return parts.flat();
 }
 
 // One formatter, so the read time reads the same in the plan and beside
@@ -291,26 +407,7 @@ export async function sceneRows({ urls, tileColumn, tile, sidecars = true }) {
   const t0 = performance.now();
   const raw = (await Promise.all(
     urls.map((u) => searchPart(u, tileColumn, tile, tally, sidecars)))).flat();
-  const rows = raw.map((r) => {
-    const t = r.datetime instanceof Date ? r.datetime.getTime() : Date.parse(r.datetime);
-    // A null or unparseable datetime makes `t` NaN, and new Date(NaN)
-    // .toISOString() throws a RangeError, which would reject the whole
-    // tile-year over one bad row. Such a row is dropped instead: it has no
-    // place on a timeline and no window can admit it.
-    if (!Number.isFinite(t)) return null;
-    const nodata = Number(r["s2:nodata_pixel_percentage"]);
-    return {
-      id: r.id,
-      ts: new Date(t).toISOString().slice(0, 19) + "Z",
-      day: new Date(t).toISOString().slice(0, 10),
-      t,
-      cloud: Number(r["eo:cloud_cover"]),
-      cover: Number.isFinite(nodata) ? 100 - nodata : null,
-      thumbnail_url: r.thumbnail_url,
-      bbox: Array.from(r.bbox ?? []),
-      baseline: r["s2:processing_baseline"],
-    };
-  }).filter(Boolean)
+  const rows = raw.map((r) => toRow(r, tileColumn)).filter(Boolean)
     .sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const ms = performance.now() - t0;
   const plan = `hyparquet range-read plan (no SQL engine, no API):\n`

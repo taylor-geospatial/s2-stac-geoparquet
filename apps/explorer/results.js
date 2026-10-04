@@ -71,3 +71,34 @@ export function filterKeyOf(f, key, search) {
   return [search?.tile, search?.year, search?.at,
     f.t0, f.t1, f.maxCloud, f.minCoverage, key].join("|");
 }
+
+// --- strip view ---------------------------------------------------------
+// A strip is one satellite pass: every scene a datastrip id covers. Measured
+// on 2026-10-04, one pass is about 238 scenes over 238 MGRS tiles, 39 degrees
+// of latitude and UTM zones 30 to 38, all captured inside 690 seconds.
+//
+// The parts are sorted by tile, and a tile name sorts by UTM zone first, so
+// one pass lands in a contiguous band of row groups rather than scattered
+// through the file: 47 of the 2026 part's 625 groups. A window of groups
+// around the clicked scene therefore walks the pass, and widening it walks
+// further along the pass instead of fetching unrelated tiles. Measured on the
+// 2026 archive part: 11 groups returns 40 scenes for 1.5 MB, 41 groups
+// returns 101 for 5.6 MB, and the whole file returns 238 for 86 MB.
+
+// The inclusive group range to read, clamped to the part.
+export function groupWindow(total, home, radius) {
+  return {
+    lo: Math.max(0, home - radius),
+    hi: Math.min(total - 1, home + radius),
+  };
+}
+
+// Fold a streamed batch into the rows already on screen. A widened window
+// re-reads the groups it already read, so the same scene arrives more than
+// once and the view must stay a set. Acquisition order, then id, so the
+// order does not shuffle as batches land.
+export function mergeStrip(have, incoming) {
+  const by = new Map(have.map((r) => [r.id, r]));
+  for (const r of incoming) by.set(r.id, r);
+  return [...by.values()].sort((a, b) => a.t - b.t || cmpId(a, b));
+}

@@ -577,3 +577,17 @@ button.mini:not(:disabled):hover { background: #43362e; }
     background: none; border: 0; border-radius: 0; box-shadow: none;
   }
 }
+
+/* The strip toggle on a result card. Its own row under the preset icons,
+   sized to its text rather than to the card. */
+.scene .mini.strip {
+  display: block; width: fit-content; margin-top: 6px; font-size: 11px;
+  padding: 2px 8px; color: var(--accent); border-color: var(--line);
+}
+.scene .mini.strip:hover { color: var(--brand); border-color: var(--brand); }
+
+/* A control the strip view has nothing for. Dimmed rather than hidden, so
+   the panel keeps its shape and the reader sees why it does not respond. */
+#imgprev.off, #imgnext.off, #zoomto.off, #imgscrub.off {
+  opacity: .35; pointer-events: none;
+}

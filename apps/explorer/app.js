@@ -44,8 +44,10 @@ import { cogTileLayer, previewImage, previewLayer, openScene, sceneCog, loadOver
 import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSES, PRESETS,
   bandsOf, HIST_BINS } from "./bands.js";
 import { dayRange, valueRange } from "./rangeslider.js";
-import { sceneRows, warmPart, readTable, keyedRows, fmtSecs } from "./search.js";
-import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
+import { sceneRows, stripRows, warmPart, readTable, keyedRows, fmtSecs }
+  from "./search.js";
+import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered, mergeStrip }
+  from "./results.js";
 // deck.gl comes from its pinned dist bundle (index.html), not an ESM CDN
 // transpile: the esm.sh build draws but cannot pick. One bundle, one luma.gl.
 // A classic script that failed to load is a missing global, not an import
@@ -57,7 +59,7 @@ if (!window.deck?.MapboxOverlay) {
   el.classList.add("error");
   throw new Error("deck.gl bundle missing");
 }
-const { MapboxOverlay, GeoJsonLayer, MVTLayer } = window.deck;
+const { MapboxOverlay, GeoJsonLayer, MVTLayer, BitmapLayer } = window.deck;
 
 // The published catalog, through its two doors. The gateway serves a named
 // file over HTTP range requests, which is what this page reads. The bucket
@@ -684,6 +686,10 @@ let hovered = null;          // the hovered feature (GeoJSON, WGS84) or null
 let cogLayer = null;         // the shown scene's TileLayer, or null
 let cogPreview = null;       // its thumbnail warp, beneath the tiles until they load
 let scrubLayer = null;       // the scrub bar's live thumbnail preview, or null
+// Strip view: one satellite pass, every scene at once. Null when the
+// panel is showing the ordinary stack of one tile.
+let strip = null;
+let stripLayers = [];
 
 // The one state object. Every mutator writes here and calls scheduleApply;
 // every renderer reads from here. Nothing else holds filter or search state.
@@ -819,6 +825,7 @@ function render() {
       updateTriggers: { getFillColor: paintKey },
       beforeId: "mgrs-line",
     }),
+    ...stripLayers.map(underLabels),
     underLabels(cogPreview),
     underLabels(cogLayer),
     underLabels(scrubLayer),
@@ -851,8 +858,12 @@ map.on("mousemove", (e) => {
     hoverFrame = 0;
     // .wrap(): on a world copy past ±180 the index is still in -180..180.
     setHovered(hoverAt ? hitIndex.at(hoverAt.wrap().lng, hoverAt.lat) : null);
+    maybeAutoShowStrip();
   });
 });
+// Zooming counts as much as moving the pointer: the scene under a still
+// cursor grows past the threshold when the camera comes in.
+map.on("moveend", () => maybeAutoShowStrip());
 map.on("mouseout", () => { hoverAt = null; setHovered(null); });
 
 function repaint() { paintKey++; render(); }
@@ -1399,6 +1410,15 @@ function widerWindow() {
 // each call site wires its own click listener to widenWindow.
 function widenButton() {
   if (!S.search) return null;
+  // A strip has no date window left to widen: it already collapsed to the
+  // day of the pass. The same button reads further along the pass instead.
+  if (strip) {
+    if (strip.radius >= STRIP_RADIUS_MAX || strip.loading) return null;
+    const b = el("button", "mini", "Show more — widen the pass");
+    b.id = "more";
+    b.type = "button";
+    return b;
+  }
   const next = widerWindow();
   if (!next) return null;
   const label = next.from !== S.from ? monthYearLabel(next.from) : monthYearLabel(next.to);
@@ -1413,6 +1433,7 @@ function widenButton() {
 // re-filters and repaints from cache — no new read. A month lock is dropped
 // first: the widened window is no longer one calendar month.
 function widenWindow() {
+  if (strip) { widenStrip(); return; }
   const next = widerWindow();
   if (!next) return;
   S.monthLock = null;
@@ -1798,7 +1819,20 @@ function firstTileDefaults() {
 }
 
 map.on("click", (e) => {
-  const tile = hitIndex.at(e.lngLat.wrap().lng, e.lngLat.lat)?.tile;
+  const lng = e.lngLat.wrap().lng, lat = e.lngLat.lat;
+  // In a strip, a click inside the pass picks that scene and stays. A
+  // click anywhere else is a request for a different tile, so the strip
+  // closes and the ordinary stack of that tile opens.
+  if (strip) {
+    const r = stripSceneAt(lng, lat);
+    if (r) {
+      const at = indexOfId(currentView(), r.id);
+      if (at >= 0) showIndex(at, false); else showOnMap(r, null, ui.preset);
+      return;
+    }
+    exitStrip();
+  }
+  const tile = hitIndex.at(lng, lat)?.tile;
   if (!TILE_RE.test(tile ?? "")) return;
   firstTileDefaults();
   selectTile(tile);
@@ -2540,6 +2574,8 @@ function imageCover() {
 }
 let zoomtoOn = false;
 function syncZoomTo() {
+  // The strip dims this control, and a camera frame must not undim it.
+  if (strip) { zoomtoOn = false; $("zoomto").disabled = true; return; }
   if (!shown) { zoomtoOn = false; $("zoomto").disabled = true; return; }
   const { seen, fills } = imageCover();
   // A camera loses the scene in two ways. It pans or zooms in until most of
@@ -2577,6 +2613,17 @@ $("imgprev").addEventListener("click", () => stepImage(-1));
 $("imgnext").addEventListener("click", () => stepImage(1));
 
 function syncNavButtons() {
+  // A strip is one pass across many tiles, not a stack over one, so there
+  // is nothing to step through. The controls stay in place and dimmed, so
+  // the panel keeps its shape and the reason is visible.
+  if (strip) {
+    setScrubEnabled(false);
+    $("imgnav").hidden = !shown;
+    setTip($("imgprev"), "");
+    setTip($("imgnext"), "");
+    return;
+  }
+  setScrubEnabled(true);
   const view = currentView();
   const at = shown ? indexOfId(view, S.displayedId) : -1;
   const pos = at >= 0 ? at : clampIndex(view, S.detachedAt);
@@ -2735,6 +2782,9 @@ function paintScrubTrack() {
 let prefetchSeq = 0;
 async function prefetchScrubStack() {
   const seq = ++prefetchSeq;
+  // A strip disables the scrub, so there is no stack to warm, and warming
+  // one would pull a preview for every scene of the pass.
+  if (strip) return;
   const view = currentView();
   if (!view.length || !S.search) return;
   const at = Math.max(0, indexOfId(view, S.displayedId));
@@ -3408,6 +3458,21 @@ function buildCard(r) {
     actions.append(b);
   }
   cap.append(actions);
+  // The pass this scene belongs to. A card only offers it when the row
+  // carries a datastrip id, which the search reads for exactly this.
+  if (r.datastrip) {
+    const sb = el("button", "mini strip", strip ? "View stack" : "View strip");
+    sb.type = "button";
+    sb.title = strip
+      ? "Back to every scene over this tile"
+      : "Every scene the satellite captured on this pass";
+    sb.setAttribute("aria-label", sb.title);
+    sb.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (strip) exitStrip(); else enterStrip(r);
+    });
+    cap.append(sb);
+  }
   card.append(cap);
   // Only visible on the pinned filtered-out card (style.css): clears the
   // scene, and the card goes with it.
@@ -3624,3 +3689,232 @@ await init();
 // Every boot path ends here, the ones that gave up early included, so the
 // URL starts following the page whether or not a restore ran.
 finishRestore();
+
+
+// --- strip view -------------------------------------------------------------
+// One satellite pass across every tile it crossed, rather than one tile
+// across every pass. The panel's machinery is unchanged: the strip swaps
+// the row set under S.search, so the filters, the sort, the cards, the
+// scrub and the nav all keep working on it.
+//
+// The rows stream. A pass crosses hundreds of tiles and the part is sorted
+// by tile, so search.js reads a widening window of row groups around the
+// clicked scene and hands back each part as it lands. The map re-fits to
+// what has arrived, which is why the view opens tight and zooms out.
+
+// Every scene's thumbnail over its own bbox. Cheap on purpose: a warped
+// preview costs a COG header read per scene, and a pass is 100+ scenes.
+// Over a whole pass the bbox placement is within a pixel of the warp.
+function stripLayersFor(rows) {
+  return rows
+    .filter((r) => r.thumbnail_url && r.bbox?.length === 4)
+    .map((r) => new BitmapLayer({
+      id: `strip-${r.id}`,
+      image: r.thumbnail_url,
+      bounds: [r.bbox[0], r.bbox[1], r.bbox[2], r.bbox[3]],
+      opacity: 0.95,
+    }));
+}
+
+function fitStrip(rows) {
+  const boxes = rows.map((r) => r.bbox).filter((b) => b?.length === 4);
+  if (!boxes.length) return;
+  const w = Math.min(...boxes.map((b) => b[0]));
+  const s0 = Math.min(...boxes.map((b) => b[1]));
+  const e = Math.max(...boxes.map((b) => b[2]));
+  const n = Math.max(...boxes.map((b) => b[3]));
+  map.fitBounds([[w, s0], [e, n]], { padding: 40, duration: 700 });
+}
+
+// The strip scene under a point, or null. Scenes overlap at tile edges,
+// so the nearest centre wins.
+function stripSceneAt(lng, lat) {
+  if (!strip) return null;
+  let best = null, bestD = Infinity;
+  for (const r of S.search.rows) {
+    const b = r.bbox;
+    if (!b || b.length !== 4) continue;
+    if (lng < b[0] || lng > b[2] || lat < b[1] || lat > b[3]) continue;
+    const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+    const d = (lng - cx) ** 2 + (lat - cy) ** 2;
+    if (d < bestD) { bestD = d; best = r; }
+  }
+  return best;
+}
+
+// How much of the viewport a bbox covers, 0 to 1, clipped to the canvas.
+function screenFractionOf(bbox) {
+  const canvas = map.getCanvas();
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  if (!cw || !ch) return 0;
+  const a = map.project([bbox[0], bbox[1]]);
+  const b = map.project([bbox[2], bbox[3]]);
+  const w = Math.max(0, Math.min(cw, Math.max(a.x, b.x)) - Math.max(0, Math.min(a.x, b.x)));
+  const h = Math.max(0, Math.min(ch, Math.max(a.y, b.y)) - Math.max(0, Math.min(a.y, b.y)));
+  return (w * h) / (cw * ch);
+}
+
+// Zoom far enough into one scene of a strip and it becomes the subject.
+// Past half the viewport the page loads it at full resolution, which is
+// what a click on it would have done. The rest of the strip stays drawn.
+const STRIP_AUTOSHOW = 0.5;
+let autoShown = null;
+function maybeAutoShowStrip() {
+  if (!strip || !hoverAt) { autoShown = null; return; }
+  const r = stripSceneAt(hoverAt.wrap().lng, hoverAt.lat);
+  if (!r || screenFractionOf(r.bbox) <= STRIP_AUTOSHOW) {
+    autoShown = null;
+    return;
+  }
+  if (autoShown === r.id || shown?.r?.id === r.id) return;
+  autoShown = r.id;
+  // No fly: the reader is already looking at it.
+  const at = indexOfId(currentView(), r.id);
+  if (at >= 0) showIndex(at, false); else showOnMap(r, null, ui.preset, null, false);
+}
+
+// How far either side of the clicked scene's row group to read, and the
+// ceiling. Measured on the 2026 archive part: 20 reads 41 groups for 101
+// scenes and 5.6 MB, 80 reads 161 groups for 169 scenes and 22 MB, and the
+// whole part is 238 scenes and 86 MB. The ceiling stops the button before
+// a reader asks the page for all of it.
+// The first step is small so the pass appears quickly, and the march
+// doubles from there. Each step reads only the groups it adds, so the
+// march costs what one read at the final radius would have cost.
+const STRIP_RADIUS_0 = 7;
+const STRIP_RADIUS_MAX = 160;
+// Long enough for fitStrip's 700 ms ease to land before the next step
+// moves the camera again.
+const STRIP_STEP_PAUSE = 900;
+
+// The pass speaks through the image panel's state line, where a single
+// scene would otherwise report its own resolution.
+function stripStatus(text, state = "loading") {
+  const n = $("cog-state");
+  if (!n) return;
+  n.dataset.state = state;
+  n.textContent = text;
+  $("cogbar").hidden = false;
+  $("imgpanel").hidden = false;
+}
+
+// The scrub walks one stack of one tile. A pass is a different axis and
+// hundreds of scenes, and its prefetch would pull a preview for each, so
+// the control goes quiet while a strip is open.
+function setScrubEnabled(on) {
+  for (const id of ["imgprev", "imgscrub", "imgnext", "zoomto"]) {
+    const n = $(id);
+    if (!n) continue;
+    n.disabled = !on;
+    n.classList.toggle("off", !on);
+  }
+}
+
+// Read the pass at the current radius and fold what arrives into the view.
+// Each part draws as it lands, so the map grows outward while the rest is
+// still in flight.
+async function readStrip() {
+  const { tile, year } = S.search;
+  const more = strip.radius < STRIP_RADIUS_MAX;
+  strip.loading = true;
+  scheduleApply({ cards: true });
+  stripStatus(S.search.rows.length
+    ? `${S.search.rows.length} scenes of this pass — reading further along it…`
+    : "Reading this pass…");
+  const urls = await partUrls(`${year}-01-01`, `${year}-12-31`, tile);
+  const got = await stripRows({
+    urls, tileColumn: COL.tileColumn, tile, datastrip: strip.datastrip,
+    radius: strip.radius, inner: strip.read ?? 0,
+    sidecars: COL.sidecars !== false,
+    onBatch: (batch) => {
+      if (!strip) return;                     // the reader outlived the view
+      S.search.rows = mergeStrip(S.search.rows, batch);
+      S.search.at = Date.now();   // a new row set, so the view memo re-runs
+      stripLayers = stripLayersFor(S.search.rows);
+      fitStrip(S.search.rows);
+      render();
+      stripStatus(`${S.search.rows.length} scenes of this pass`
+        + (more ? " — reading further along it…" : "…"));
+      scheduleApply({ cards: true, nav: true });
+    },
+  });
+  if (!strip) return;
+  strip.loading = false;
+  strip.read = strip.radius;
+  $("sql").textContent = got.plan;
+  const n = S.search.rows.length;
+  const tiles = new Set(S.search.rows.map((r) => r.tile)).size;
+  stripStatus(more
+    ? `${n} scenes over ${tiles} tiles — reading further along the pass…`
+    : `${n} scenes over ${tiles} tiles on this pass.`, more ? "loading" : "ok");
+  say(`${n} scenes on this pass, across ${tiles} tiles.`);
+  scheduleApply({ cards: true, nav: true });
+}
+
+// Widen on a timer until the pass is in, pausing between steps so each
+// camera move reads as one. Leaving the strip ends the march, and so does
+// a manual widen, which takes over the next step.
+async function marchStrip(seq) {
+  while (strip && strip.march === seq && strip.radius < STRIP_RADIUS_MAX) {
+    await new Promise((r) => setTimeout(r, STRIP_STEP_PAUSE));
+    if (!strip || strip.march !== seq) return;
+    strip.radius = Math.min(STRIP_RADIUS_MAX, strip.radius * 2);
+    await readStrip();
+  }
+}
+
+async function widenStrip() {
+  if (!strip || strip.loading || strip.radius >= STRIP_RADIUS_MAX) return;
+  strip.march = null;                 // the reader asked, so stop the timer
+  strip.radius = Math.min(STRIP_RADIUS_MAX, strip.radius * 2);
+  const before = S.search.rows.length;
+  await readStrip();
+  if (!strip) return;
+  const gained = S.search.rows.length - before;
+  say(gained
+    ? `${gained} more scene(s) of the pass.`
+    : "No more scenes of this pass within reach.");
+}
+
+async function enterStrip(row) {
+  if (!S.search || !row.datastrip) return;
+  strip = {
+    datastrip: row.datastrip,
+    day: row.day,
+    anchorId: row.id,
+    radius: STRIP_RADIUS_0,
+    read: 0,
+    loading: false,
+    march: 1,
+    saved: { rows: S.search.rows, from: S.from, to: S.to },
+  };
+  // The pass happened on one day, so the window collapses to it. The
+  // sliders stay live, and the sort still applies.
+  setWindow(row.day, row.day);
+  S.search.rows = [];
+  S.search.at = Date.now();
+  S.shown = 200;
+  // Every card carries the mode in its button, so none of them survives
+  // the switch.
+  cardNodes = new Map();
+  stripLayers = [];
+  say(`Reading the pass ${row.datastrip} …`);
+  await readStrip();
+  if (strip && strip.march === 1) marchStrip(1);
+}
+
+function exitStrip() {
+  if (!strip) return;
+  const { saved } = strip;
+  strip = null;
+  autoShown = null;
+  stripLayers = [];
+  S.search.rows = saved.rows;
+  S.search.at = Date.now();
+  S.shown = 15;
+  cardNodes = new Map();
+  setWindow(saved.from, saved.to);
+  render();
+  scheduleApply({ cards: true, nav: true });
+  say("Back to the scenes over this tile.");
+}

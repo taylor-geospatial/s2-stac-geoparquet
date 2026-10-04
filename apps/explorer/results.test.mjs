@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SORTS, filterRows, sortRows, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered }
+import { SORTS, filterRows, sortRows, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered,
+  groupWindow, mergeStrip }
   from "./results.js";
 
 const day = (d) => Date.parse(`${d}T12:00:00Z`);
@@ -84,4 +85,35 @@ test("whyFiltered names each failing gate and the value that admits the row", ()
   for (const r of rows) {
     assert.equal(whyFiltered(r, f).length === 0, filterRows([r], f).length === 1, r.id);
   }
+});
+
+// --- strip view -------------------------------------------------------------
+
+test("groupWindow clamps to the part and grows by radius", () => {
+  // Middle of a part: symmetric.
+  assert.deepEqual(groupWindow(625, 271, 20), { lo: 251, hi: 291 });
+  // Near each end: clamped, never negative, never past the last group.
+  assert.deepEqual(groupWindow(625, 3, 20), { lo: 0, hi: 23 });
+  assert.deepEqual(groupWindow(625, 620, 20), { lo: 600, hi: 624 });
+  // A radius wider than the part takes the whole part.
+  assert.deepEqual(groupWindow(10, 4, 999), { lo: 0, hi: 9 });
+  // A single-group part.
+  assert.deepEqual(groupWindow(1, 0, 5), { lo: 0, hi: 0 });
+  // Radius 0 is the home group alone.
+  assert.deepEqual(groupWindow(625, 271, 0), { lo: 271, hi: 271 });
+});
+
+test("mergeStrip dedupes by id and keeps acquisition order", () => {
+  const a = [{ id: "b", t: 2 }, { id: "a", t: 1 }];
+  const b = [{ id: "c", t: 3 }, { id: "b", t: 2 }];
+  const out = mergeStrip(a, b);
+  assert.deepEqual(out.map((r) => r.id), ["a", "b", "c"]);
+  // A widened window re-reads groups it already read, so the same batch
+  // can arrive twice. The view must not double up.
+  assert.deepEqual(mergeStrip(out, b).map((r) => r.id), ["a", "b", "c"]);
+  // An empty batch leaves the view alone.
+  assert.deepEqual(mergeStrip(out, []).map((r) => r.id), ["a", "b", "c"]);
+  // A tie on time falls back to the id, so the order is stable.
+  const tie = mergeStrip([], [{ id: "z", t: 1 }, { id: "y", t: 1 }]);
+  assert.deepEqual(tie.map((r) => r.id), ["y", "z"]);
 });
