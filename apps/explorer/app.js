@@ -44,8 +44,10 @@ import { cogTileLayer, previewImage, previewLayer, openScene, sceneCog, loadOver
 import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSES, PRESETS,
   bandsOf, HIST_BINS } from "./bands.js";
 import { dayRange, valueRange } from "./rangeslider.js";
-import { sceneRows, warmPart, readTable, keyedRows, fmtSecs } from "./search.js";
-import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
+import { sceneRows, stripRows, warmPart, readTable, keyedRows, fmtSecs }
+  from "./search.js";
+import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered, mergeStrip }
+  from "./results.js";
 // deck.gl comes from its pinned dist bundle (index.html), not an ESM CDN
 // transpile: the esm.sh build draws but cannot pick. One bundle, one luma.gl.
 // A classic script that failed to load is a missing global, not an import
@@ -57,7 +59,7 @@ if (!window.deck?.MapboxOverlay) {
   el.classList.add("error");
   throw new Error("deck.gl bundle missing");
 }
-const { MapboxOverlay, GeoJsonLayer, MVTLayer } = window.deck;
+const { MapboxOverlay, GeoJsonLayer, MVTLayer, BitmapLayer } = window.deck;
 
 // The published catalog, through its two doors. The gateway serves a named
 // file over HTTP range requests, which is what this page reads. The bucket
@@ -684,6 +686,10 @@ let hovered = null;          // the hovered feature (GeoJSON, WGS84) or null
 let cogLayer = null;         // the shown scene's TileLayer, or null
 let cogPreview = null;       // its thumbnail warp, beneath the tiles until they load
 let scrubLayer = null;       // the scrub bar's live thumbnail preview, or null
+// Strip view: one satellite pass, every scene at once. Null when the
+// panel is showing the ordinary stack of one tile.
+let strip = null;
+let stripLayers = [];
 
 // The one state object. Every mutator writes here and calls scheduleApply;
 // every renderer reads from here. Nothing else holds filter or search state.
@@ -819,6 +825,7 @@ function render() {
       updateTriggers: { getFillColor: paintKey },
       beforeId: "mgrs-line",
     }),
+    ...stripLayers.map(underLabels),
     underLabels(cogPreview),
     underLabels(cogLayer),
     underLabels(scrubLayer),
@@ -3408,6 +3415,21 @@ function buildCard(r) {
     actions.append(b);
   }
   cap.append(actions);
+  // The pass this scene belongs to. A card only offers it when the row
+  // carries a datastrip id, which the search reads for exactly this.
+  if (r.datastrip) {
+    const sb = el("button", "mini strip", strip ? "View stack" : "View strip");
+    sb.type = "button";
+    sb.title = strip
+      ? "Back to every scene over this tile"
+      : "Every scene the satellite captured on this pass";
+    sb.setAttribute("aria-label", sb.title);
+    sb.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (strip) exitStrip(); else enterStrip(r);
+    });
+    cap.append(sb);
+  }
   card.append(cap);
   // Only visible on the pinned filtered-out card (style.css): clears the
   // scene, and the card goes with it.
@@ -3624,3 +3646,96 @@ await init();
 // Every boot path ends here, the ones that gave up early included, so the
 // URL starts following the page whether or not a restore ran.
 finishRestore();
+
+
+// --- strip view -------------------------------------------------------------
+// One satellite pass across every tile it crossed, rather than one tile
+// across every pass. The panel's machinery is unchanged: the strip swaps
+// the row set under S.search, so the filters, the sort, the cards, the
+// scrub and the nav all keep working on it.
+//
+// The rows stream. A pass crosses hundreds of tiles and the part is sorted
+// by tile, so search.js reads a widening window of row groups around the
+// clicked scene and hands back each part as it lands. The map re-fits to
+// what has arrived, which is why the view opens tight and zooms out.
+
+// Every scene's thumbnail over its own bbox. Cheap on purpose: a warped
+// preview costs a COG header read per scene, and a pass is 100+ scenes.
+// Over a whole pass the bbox placement is within a pixel of the warp.
+function stripLayersFor(rows) {
+  return rows
+    .filter((r) => r.thumbnail_url && r.bbox?.length === 4)
+    .map((r) => new BitmapLayer({
+      id: `strip-${r.id}`,
+      image: r.thumbnail_url,
+      bounds: [r.bbox[0], r.bbox[1], r.bbox[2], r.bbox[3]],
+      opacity: 0.95,
+    }));
+}
+
+function fitStrip(rows) {
+  const boxes = rows.map((r) => r.bbox).filter((b) => b?.length === 4);
+  if (!boxes.length) return;
+  const w = Math.min(...boxes.map((b) => b[0]));
+  const s0 = Math.min(...boxes.map((b) => b[1]));
+  const e = Math.max(...boxes.map((b) => b[2]));
+  const n = Math.max(...boxes.map((b) => b[3]));
+  map.fitBounds([[w, s0], [e, n]], { padding: 40, duration: 700 });
+}
+
+async function enterStrip(row) {
+  if (!S.search || !row.datastrip) return;
+  const { tile, year } = S.search;
+  strip = {
+    datastrip: row.datastrip,
+    day: row.day,
+    anchorId: row.id,
+    saved: { rows: S.search.rows, from: S.from, to: S.to },
+  };
+  // The pass happened on one day, so the window collapses to it. The
+  // sliders stay live, and the sort still applies.
+  setWindow(row.day, row.day);
+  S.search.rows = [];
+  S.search.at = Date.now();
+  S.shown = 200;
+  // Every card carries the mode in its button, so none of them survives
+  // the switch.
+  cardNodes = new Map();
+  stripLayers = [];
+  say(`Reading the pass ${row.datastrip} …`);
+
+  const urls = await partUrls(`${year}-01-01`, `${year}-12-31`, tile);
+  const got = await stripRows({
+    urls, tileColumn: COL.tileColumn, tile, datastrip: row.datastrip,
+    radius: 20, sidecars: COL.sidecars !== false,
+    onBatch: (batch) => {
+      if (!strip) return;                     // the reader outlived the view
+      S.search.rows = mergeStrip(S.search.rows, batch);
+      S.search.at = Date.now();   // a new row set, so the view memo re-runs
+      stripLayers = stripLayersFor(S.search.rows);
+      fitStrip(S.search.rows);
+      render();
+      scheduleApply({ cards: true, nav: true });
+    },
+  });
+  if (!strip) return;
+  $("sql").textContent = got.plan;
+  say(`${S.search.rows.length} scenes on this pass, across `
+    + `${new Set(S.search.rows.map((r) => r.tile)).size} tiles.`);
+  scheduleApply({ cards: true, nav: true });
+}
+
+function exitStrip() {
+  if (!strip) return;
+  const { saved } = strip;
+  strip = null;
+  stripLayers = [];
+  S.search.rows = saved.rows;
+  S.search.at = Date.now();
+  S.shown = 15;
+  cardNodes = new Map();
+  setWindow(saved.from, saved.to);
+  render();
+  scheduleApply({ cards: true, nav: true });
+  say("Back to the scenes over this tile.");
+}
