@@ -1728,8 +1728,8 @@ function timingLine(search) {
     ? readMs.reduce((a, b) => a + b, 0) / readMs.length : null;
   const now = fmtSecs(search.ms ?? 0);
   const n = readMs.length;
-  const text = avg === null ? ` \u00b7 ${now}`
-    : ` \u00b7 ${now} \u00b7 avg ${fmtSecs(avg)}`;
+  const text = avg === null ? ` in ${now}`
+    : ` in ${now} (avg ${fmtSecs(avg)})`;
   // The read count belongs in the tooltip. On the line it pushes the sort
   // control onto a second row in a 360px panel.
   const head = search.cached
