@@ -2534,12 +2534,11 @@ function flyToImage(bbox) {
   map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 800 });
 }
 
-// The shown image's bbox against the viewport, as two fractions of the part
-// they share: `seen` is how much of the image the viewport holds, and `fills`
-// is how much of the viewport the image covers. Both are 1 with nothing
-// shown, which is the reading that leaves the button alone.
-function imageCover() {
-  const b = shown ? bboxOf(shown.r) : null;
+// A bbox against the viewport, as two fractions of the part they share:
+// `seen` is how much of the image the viewport holds, and `fills` is how
+// much of the viewport the image covers. Both are 1 with no bbox, which is
+// the reading that leaves the Zoom to button alone.
+function bboxCover(b) {
   if (!b) return { seen: 1, fills: 1 };
   const mb = map.getBounds();
   const w = Math.max(0, Math.min(b[2], mb.getEast()) - Math.max(b[0], mb.getWest()));
@@ -2549,6 +2548,15 @@ function imageCover() {
   const view = (mb.getEast() - mb.getWest()) * (mb.getNorth() - mb.getSouth());
   return { seen: image > 0 ? over / image : 1, fills: view > 0 ? over / view : 1 };
 }
+const imageCover = () => bboxCover(shown ? bboxOf(shown.r) : null);
+// Is a scene off screen, rather than merely bigger or smaller than the
+// viewport? A camera deep inside a footprint reads seen ~ 0 and fills 1, and
+// a camera zoomed far out of one reads seen 1 and fills ~ 0. Only a camera
+// somewhere else entirely reads both at 0.
+const offScreen = (r) => {
+  const { seen, fills } = bboxCover(bboxOf(r));
+  return seen < 0.02 && fills < 0.02;
+};
 let zoomtoOn = false;
 function syncZoomTo() {
   if (!shown) { zoomtoOn = false; $("zoomto").disabled = true; return; }
@@ -3382,14 +3390,19 @@ const CARD_PRESETS = [
 // Show a card's scene, through the nav state so every indicator follows it:
 // showOnMap alone leaves S.displayedId on the previously shown scene, and
 // the .current outline, the scrub thumb, the ‹/› steps and the hash's
-// scene= all keep pointing there. A card click is an explicit "frame this
-// scene", so it flies. The fallback covers a row that fell out of the view
-// between the render that built this card and the click on it.
+// scene= all keep pointing there. A card is the scrub's move in another
+// control, so it holds the camera: a reader who zoomed into one corner of a
+// tile clicks down the stack to compare that corner on each date, and a fly
+// would throw the comparison away every time. Only a scene the camera is
+// nowhere near gets framed, because nothing would otherwise appear. The
+// fallback covers a row that fell out of the view between the render that
+// built this card and the click on it.
 function showCard(r, preset) {
   if (preset) ui.preset = preset;
+  const fly = offScreen(r);
   const at = indexOfId(currentView(), r.id);
-  if (at >= 0) showIndex(at, true);
-  else showOnMap(r, null, ui.preset);
+  if (at >= 0) showIndex(at, fly);
+  else showOnMap(r, null, ui.preset, null, fly);
 }
 
 function buildCard(r) {
