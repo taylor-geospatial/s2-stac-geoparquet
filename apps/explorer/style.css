@@ -301,6 +301,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .resn, .restime { white-space: nowrap; }
 #results { display: flex; flex-direction: column; gap: 10px; }
 #results:empty { display: none; }
+/* A read in flight over an earlier answer. The cards stay put so the panel
+   keeps its height and the reader keeps their place, and they go inert so a
+   click cannot act on the answer the page is replacing. */
+#results.busy { opacity: .45; pointer-events: none; }
 /* A card is one button-like target: a click anywhere shows the scene. */
 .scene { display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
          border-radius: 4px; padding: 2px; }

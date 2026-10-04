@@ -3482,7 +3482,19 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   prefetchSeq++;
   searching = true;
   paintCountWait();
-  box.replaceChildren(el("p", "hint", "Reading the item parts…"));
+  if (resumed) {
+    // Hold the previous tile's cards while the read runs, dimmed and inert.
+    // The one-line hint below collapses #results, which shrinks the panel's
+    // scroll range under the reader, and the browser then clamps the scroll
+    // to the top. On a slow connection the panel sits up there for the whole
+    // read and drops back when the rows land. Nothing resizes this way, so
+    // nothing moves. The count line's spinner carries the wait.
+    // renderResultsNow returns on a null search, so these cards stay until
+    // this run replaces them.
+    box.classList.add("busy");
+  } else {
+    box.replaceChildren(el("p", "hint", "Reading the item parts…"));
+  }
   $("sql").textContent = "Range-reading…";
   // The mirror while the read runs. updateFilterStatus keeps it current from
   // the first rows on, but it cannot write it yet: S.search is null here.
@@ -3497,6 +3509,7 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
     if (seq !== searchSeq) return;
     searching = false;
     paintCountWait();
+    box.classList.remove("busy");
     box.replaceChildren(el("p", "hint", `Query failed — ${err.message}`));
     say(`Could not read the item parts — ${err.message}`, true);
     return;
@@ -3505,6 +3518,7 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   if (!got.urls.length) {
     searching = false;
     paintCountWait();
+    box.classList.remove("busy");
     $("sql").textContent = "";
     $("api").textContent = "";
     paintDuck(null);
@@ -3529,6 +3543,7 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   S.shown = 15;
   S.displayedId = null;
   S.detachedAt = 0;
+  box.classList.remove("busy");
   renderResultsNow();
   scheduleApply({ nav: true });
   const view = currentView();
