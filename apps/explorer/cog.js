@@ -301,10 +301,26 @@ export async function tciOverviewImage(cog, targetPx = HD_TARGET, signal) {
     bands: cog.bands, scale: lvl.scale, x0: 0, y0: 0, nodata: cogNodata(raster) }, W, H);
 }
 
+// A bounded, keyed promise cache. A rejected read leaves no entry, so an
+// aborted tile (the camera moved on) is read again rather than remembered
+// as a failure.
+function cached(map, key, limit, make) {
+  const hit = map.get(key);
+  if (hit) return hit;
+  const p = make().catch((err) => { map.delete(key); throw err; });
+  map.set(key, p);
+  if (map.size > limit) map.delete(map.keys().next().value);
+  return p;
+}
+
 // The deck.gl layer for an opened COG: one TileLayer, clipped to the scene's
 // footprint so no tile outside it is ever requested. `events` may carry the
 // TileLayer's onViewportLoad / onTileError (see showOnMap in app.js).
-export function cogTileLayer(cog, id = "cog", events = {}) {
+// `tiles` is the scene's tile cache. A TileLayer drops its own tiles when it
+// leaves the map, so without this cache a return to a scene reads every tile
+// again. With it the pixels outlive the layer, for as long as app.js keeps
+// the scene.
+export function cogTileLayer(cog, id = "cog", events = {}, tiles = null) {
   return new TileLayer({
     id,
     tileSize: TILE,
@@ -313,7 +329,10 @@ export function cogTileLayer(cog, id = "cog", events = {}) {
     extent: cog.bounds,
     maxRequests: 6,
     refinementStrategy: "no-overlap",
-    getTileData: ({ bbox, signal }) => readCogTile(cog, bbox, signal),
+    getTileData: ({ index, bbox, signal }) => (tiles
+      ? cached(tiles, `${index.z}/${index.x}/${index.y}`, TILE_CACHE,
+        () => readCogTile(cog, bbox, signal))
+      : readCogTile(cog, bbox, signal)),
     renderSubLayers: (props) => {
       const { west, south, east, north } = props.tile.bbox;
       return props.data ? new BitmapLayer(props, {
@@ -331,16 +350,18 @@ export function cogTileLayer(cog, id = "cog", events = {}) {
 // `overviews` band -> the coarsest overview read whole (preview and
 // histogram), `previewPlanes` band -> that overview warped over the scene,
 // `planes` "z/x/y/band" -> a tile's warped plane (bounded; the oldest go
-// first). A band that fails to open keeps its rejection, so twenty tiles do
-// not each retry a 404. All is dropped with the scene (app.js).
+// first), `tiles` "z/x/y" -> a warped TCI tile (bounded the same way). A band
+// that fails to open keeps its rejection, so twenty tiles do not each retry a
+// 404. All is dropped with the scene (app.js).
 // ---------------------------------------------------------------------------
 const PREVIEW_MIN = 256;   // the preview overview's long side, at least
 const PLANE_CACHE = 400;   // tiles x bands kept per scene (~100 MB of Float32)
+const TILE_CACHE = 96;     // TCI tiles kept per scene (~24 MB of RGBA)
 export const bandHref = (dir, band) => `${dir}/${band}.tif`;
 
 export function openScene(id, dir) {
   return { id, dir, bounds: null, cogs: new Map(), overviews: new Map(),
-    previewPlanes: new Map(), planes: new Map() };
+    previewPlanes: new Map(), planes: new Map(), tiles: new Map() };
 }
 
 // One band's COG, opened once per scene. The first to open sets the scene's

@@ -2503,6 +2503,26 @@ function drawHist(canvas, stats, lo, hi, min, max) {
 let shown = null;
 Object.defineProperties(window.S2, { shown: { get: () => shown }, ui: { value: ui } });
 
+// The scenes a step away from the one on the map. Stepping back and forth
+// over two dates is how a reader compares them, and every step used to re-read
+// the COG headers, the thumbnail and every tile: the map fell back to the
+// blurred preview each time. A scene holds its opened COGs, its overviews and
+// its warped tiles (cog.js), so holding the scene holds all of it, and a step
+// back draws from memory.
+//
+// Three scenes, because a comparison is two and the third covers a step past
+// one of them and back. Each holds at most TILE_CACHE tiles, so the bound is
+// the tile cache times three.
+const WARM_SCENES = 3;
+const warmed = new Map();
+const warmScene = (id) => warmed.get(id);
+function keepWarm(me) {
+  // Re-insert so the Map's order is least-recent first.
+  warmed.delete(me.id);
+  warmed.set(me.id, { scene: me.scene, bitmapP: me.bitmapP });
+  if (warmed.size > WARM_SCENES) warmed.delete(warmed.keys().next().value);
+}
+
 // The preview comes off once the tile layer has every tile of the resting
 // viewport. onViewportLoad fires mid-flight too (each coarse view the camera
 // passes through loads), so while the map moves this waits for its moveend
@@ -3108,13 +3128,19 @@ async function showBandsLoaded(me, spec, serial, failed) {
   spec = me.spec = bandSpec(me);
   syncPanel(spec, me);
   buildChannels(me, spec);
-  const preview = bandPreviewImage(me.scene, spec);
   cogLayer = bandTileLayer(me.scene, spec, styleKeyOf(spec), `cog-${id}-${me.bandsKey}`, me.eventsFor(me.bandsKey));
-  cogPreview = preview ? previewLayer(preview, me.scene, `cog-preview-${id}`) : null;
   // The real bands are on the map now; the flat scrub thumbnail that
   // bridged the release has done its job.
   scrubLayer = null;
   render();
+  // The same frame wait as showTci. A scene stepped back to holds its warped
+  // planes, so the tiles can be ready before this line and the preview would
+  // flash a blur over them.
+  await new Promise(requestAnimationFrame);
+  if (stale(me, serial)) return;
+  const preview = me.settled ? null : bandPreviewImage(me.scene, spec);
+  cogPreview = preview ? previewLayer(preview, me.scene, `cog-preview-${id}`) : null;
+  if (cogPreview) render();
   cogbar(id, "loading", preview ? "Preview shown — loading full resolution…" : "Loading full resolution…");
   debug(`[cog] ${id} ${me.bandsKey} preview shown at ${(performance.now() - me.t0).toFixed(0)} ms`);
   if (me.missing.length) {
@@ -3150,9 +3176,15 @@ async function showTci(me, spec, serial) {
   cogbar(id, "loading", "Loading preview…");
   say(`Preview of ${id} (True color) — loading full-resolution tiles…`);
   me.bitmapP ??= thumbnailBitmap(r.thumbnail_url);
+  // Does this scene still hold the tiles it drew last time? Read it before
+  // the layer exists, because the layer starts refilling the cache at once.
+  // A step holds the camera, so those tiles are the ones this view needs, and
+  // a blurred thumbnail under them would only flash. me.settled cannot answer
+  // this: the layer does not report itself loaded at every zoom.
+  const warmTiles = me.scene.tiles.size > 0;
   const cog = await sceneCog(me.scene, "TCI");
   if (stale(me, serial)) return;
-  cogLayer = cogTileLayer(cog, `cog-${id}-TCI`, me.eventsFor("TCI"));
+  cogLayer = cogTileLayer(cog, `cog-${id}-TCI`, me.eventsFor("TCI"), me.scene.tiles);
   // The real tiles are registered; the flat scrub thumbnail that bridged
   // the release has done its job.
   scrubLayer = null;
@@ -3160,11 +3192,17 @@ async function showTci(me, spec, serial) {
   cogbar(id, "loading", "Loading full resolution…");
   const bitmap = await me.bitmapP;
   if (stale(me, serial)) return;
+  // Warm tiles resolve in a microtask, and so does a warm thumbnail, so the
+  // preview would win the race and flash a blur over tiles that are already
+  // there. Give deck.gl a frame to report the layer loaded, then read
+  // me.settled below. A cold scene pays one frame of the seconds it waits.
+  await new Promise(requestAnimationFrame);
+  if (stale(me, serial)) return;
   // Only thumbnail.jpg paints nodata white; preview.jpg and the .jp2 of
   // some 2018 rows (which Chrome and Firefox cannot decode, Safari can)
   // paint it black (cog.js, jpegNodataMask). The file name says which.
   const white = /\/thumbnail\.jpg$/i.test(new URL(r.thumbnail_url).pathname);
-  const preview = bitmap && previewImage(cog, bitmap, { white });
+  const preview = !warmTiles && bitmap && previewImage(cog, bitmap, { white });
   // Under the tiles unless they have all settled already; a failed tile
   // keeps it, as the bar says.
   if (preview && !me.settled) {
@@ -3190,9 +3228,10 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   const id = String(r.id);
   // A chip on the scene already shown keeps what it has read and set.
   const prev = shown?.id === id ? shown : null;
+  const warm = prev ?? warmScene(id);
   const me = shown = { id, r, t0: performance.now(), serial: 0, bandsKey: null, spec: null,
     settled: false, failed: false, missing: [], ranges: prev?.ranges ?? new Map(),
-    offset: offsetOf(r), scene: prev?.scene ?? null, bitmapP: prev?.bitmapP ?? null,
+    offset: offsetOf(r), scene: warm?.scene ?? null, bitmapP: warm?.bitmapP ?? null,
     loading: false, eventsFor: null };
   const bbox = bboxOf(r);
   if (fly && bbox) map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 1200 });
@@ -3225,6 +3264,7 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   });
   try {
     me.scene ??= openScene(id, sceneDirOf(r));
+    keepWarm(me);
     ui.preset = preset;
     if (band) ui.single = band;
     $("bandbox").hidden = false;
