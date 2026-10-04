@@ -356,7 +356,9 @@ export function cogTileLayer(cog, id = "cog", events = {}, tiles = null) {
 // ---------------------------------------------------------------------------
 const PREVIEW_MIN = 256;   // the preview overview's long side, at least
 const PLANE_CACHE = 400;   // tiles x bands kept per scene (~100 MB of Float32)
-const TILE_CACHE = 96;     // TCI tiles kept per scene (~24 MB of RGBA)
+// A safety valve, not the real bound. One scene cannot run away on a large
+// monitor, and app.js trims the total across warm scenes (TILE_BUDGET).
+const TILE_CACHE = 200;    // TCI tiles kept per scene (~50 MB of RGBA)
 export const bandHref = (dir, band) => `${dir}/${band}.tif`;
 
 export function openScene(id, dir) {

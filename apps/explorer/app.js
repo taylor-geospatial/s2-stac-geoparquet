@@ -45,7 +45,8 @@ import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSE
   bandsOf, HIST_BINS } from "./bands.js";
 import { dayRange, valueRange } from "./rangeslider.js";
 import { sceneRows, warmPart, readTable, keyedRows, fmtSecs } from "./search.js";
-import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
+import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered,
+  trimToBudget } from "./results.js";
 // deck.gl comes from its pinned dist bundle (index.html), not an ESM CDN
 // transpile: the esm.sh build draws but cannot pick. One bundle, one luma.gl.
 // A classic script that failed to load is a missing global, not an import
@@ -2510,10 +2511,13 @@ Object.defineProperties(window.S2, { shown: { get: () => shown }, ui: { value: u
 // its warped tiles (cog.js), so holding the scene holds all of it, and a step
 // back draws from memory.
 //
-// Three scenes, because a comparison is two and the third covers a step past
-// one of them and back. Each holds at most TILE_CACHE tiles, so the bound is
-// the tile cache times three.
-const WARM_SCENES = 3;
+// Eight scenes, so a reader can walk a week of dates forward and still step
+// back over all of them. The count is cheap on its own: a scene's COGs,
+// overviews and thumbnail are small. The tiles are what cost, so they are
+// bounded across all warm scenes together rather than per scene. One scene at
+// a viewport measured 54 tiles, so the budget holds about seven such views.
+const WARM_SCENES = 8;
+const TILE_BUDGET = 400;     // warped TCI tiles over all warm scenes, ~100 MB
 const warmed = new Map();
 const warmScene = (id) => warmed.get(id);
 function keepWarm(me) {
@@ -2521,7 +2525,13 @@ function keepWarm(me) {
   warmed.delete(me.id);
   warmed.set(me.id, { scene: me.scene, bitmapP: me.bitmapP });
   if (warmed.size > WARM_SCENES) warmed.delete(warmed.keys().next().value);
+  trimWarmTiles();
 }
+// Give up the least recent scene's tiles first. The scene on the map went in
+// last, so it is the last to lose anything. trimToBudget (results.js) holds
+// the arithmetic, where node --test can reach it.
+const trimWarmTiles = () =>
+  trimToBudget([...warmed.values()].map((w) => w.scene.tiles), TILE_BUDGET);
 
 // The preview comes off once the tile layer has every tile of the resting
 // viewport. onViewportLoad fires mid-flight too (each coarse view the camera
