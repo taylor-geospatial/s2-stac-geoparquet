@@ -44,7 +44,7 @@ import { cogTileLayer, previewImage, previewLayer, openScene, sceneCog, loadOver
 import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSES, PRESETS,
   bandsOf, HIST_BINS } from "./bands.js";
 import { dayRange, valueRange } from "./rangeslider.js";
-import { sceneRows, warmPart, readTable, keyedRows } from "./search.js";
+import { sceneRows, warmPart, readTable, keyedRows, fmtSecs } from "./search.js";
 import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
 // deck.gl comes from its pinned dist bundle (index.html), not an ESM CDN
 // transpile: the esm.sh build draws but cannot pick. One bundle, one luma.gl.
@@ -59,10 +59,21 @@ if (!window.deck?.MapboxOverlay) {
 }
 const { MapboxOverlay, GeoJsonLayer, MVTLayer } = window.deck;
 
+// The published catalog, through its two doors. The gateway serves a named
+// file over HTTP range requests, which is what this page reads. The bucket
+// is the same bytes, and DuckDB needs it: it expands a glob over s3:// and
+// refuses one over https:// ("Globs (*) for generic HTTP file are not
+// supported"). The copyable query in the "API request" box names the bucket
+// for that reason, and names it whatever ?base= says, so a reader always
+// gets a query against the published data.
+const PUBLIC_HTTPS = "https://data.source.coop/tge-labs/s2-stac-geoparquet";
+const PUBLIC_S3 = PUBLIC_HTTPS.replace(
+  "https://data.source.coop/", "s3://us-west-2.opendata.source.coop/");
+
 // ?base=http://localhost:8081 points the whole app at a local publish tree,
 // which is how it is developed before the bucket is populated.
 export const BASE = new URLSearchParams(location.search).get("base")
-  ?? "https://data.source.coop/tge-labs/s2-stac-geoparquet";
+  ?? PUBLIC_HTTPS;
 
 // The collections this page can show and what differs between them; the
 // rest — the stats products, the scene query, the COG reads — is the same
@@ -228,7 +239,8 @@ const WANT = {
     url.searchParams.set("collection", sel.value);
     location.assign(url);
   });
-  $("title").textContent = COL.title;
+  // #title is the application name and is set in index.html. COL.title
+  // names the collection, which the select and the tip below carry.
   $("sub").textContent = `Scenes since ${COL.since}, read from static files. No API.`;
   $("sub-info").dataset.tip = `${COL.title} scenes since ${COL.since}. Every query on this `
     + "page is an HTTP range read against static GeoParquet on Source Cooperative. Each "
@@ -1465,7 +1477,7 @@ function restoreControls(defaultYear) {
   S.year = year;
   $("year").value = String(year);
   if (WANT.metric) { $("metric").value = WANT.metric; updateLegend(); }
-  if (WANT.sort) { S.sort = WANT.sort; $("sort").value = WANT.sort; }
+  if (WANT.sort) { S.sort = WANT.sort; $("sort").value = WANT.sort; sortTip?.(); }
   // The scene-count slider's bound follows the window (updateScenesBound),
   // and it starts at 1: raise it far enough to hold the asked value, or the
   // input would clamp it away here. The first paint then re-bounds the slider
@@ -1548,14 +1560,27 @@ async function init() {
   $("minscenes").addEventListener("input", onSlider);
   // Populate and wire the result sort control. Reset the shown card count on
   // every sort change to restart pagination at card 1.
-  for (const [key, s] of Object.entries(SORTS)) $("sort").append(new Option(s.label, key));
+  for (const [key, s] of Object.entries(SORTS)) {
+    const o = new Option(s.label, key);
+    o.title = s.tip;
+    $("sort").append(o);
+  }
   $("sort").value = S.sort;
+  // The select wears the tip of whatever is chosen, because an option's own
+  // title only shows while the list is open. It reads the control rather
+  // than S.sort: restoreControls sets both, and this runs on either path.
+  sortTip = () => { $("sort").title = SORTS[$("sort").value]?.tip ?? ""; };
+  sortTip();
   function setSort(key) {
     S.sort = key;
     S.shown = 15;
+    sortTip();
     scheduleApply({ cards: true, nav: true });
   }
   $("sort").addEventListener("change", () => setSort($("sort").value));
+  // The toggle only changes how much of the query is shown, so it repaints
+  // the pane from the arguments already held rather than running anything.
+  $("duck-prep").addEventListener("change", () => paintDuck());
   say("Reading the stats timeline…");
   let span, found;
   try {
@@ -1675,7 +1700,8 @@ const YEAR_CACHE_MAX = 8;
 const yearCache = new Map();
 function yearRows(tile, year) {
   const key = `${COLLECTION_ID}|${tile}|${year}`;
-  if (!yearCache.has(key)) {
+  const cached = yearCache.has(key);
+  if (!cached) {
     const p = (async () => {
       // The whole year is the window, so it names every month's live part of
       // that year alongside the year's archive part.
@@ -1689,7 +1715,30 @@ function yearRows(tile, year) {
     yearCache.set(key, p);
     if (yearCache.size > YEAR_CACHE_MAX) yearCache.delete(yearCache.keys().next().value);
   }
-  return yearCache.get(key);
+  return yearCache.get(key).then((got) => ({ ...got, cached }));
+}
+
+// How long every search this session took to answer, in milliseconds. A
+// search served from yearCache counts too: it answered, and the time it
+// took is the point of holding the year in memory.
+const readMs = [];
+function timingLine(search) {
+  if (!search) return { text: "", tip: "" };
+  const avg = readMs.length
+    ? readMs.reduce((a, b) => a + b, 0) / readMs.length : null;
+  const now = fmtSecs(search.ms ?? 0);
+  const n = readMs.length;
+  const text = avg === null ? ` in ${now}`
+    : ` in ${now} (avg ${fmtSecs(avg)})`;
+  // The read count belongs in the tooltip. On the line it pushes the sort
+  // control onto a second row in a 360px panel.
+  const head = search.cached
+    ? `This tile-year was already in memory and answered in ${now}. `
+    : `This search range-read the year's parts in ${now}. `;
+  const tail = n
+    ? `Session average ${fmtSecs(avg)} over ${n} search${n === 1 ? "" : "es"}.`
+    : "No search has finished yet.";
+  return { text, tip: head + tail };
 }
 
 // The filtered, sorted view of the active search, memoised on every input.
@@ -1712,8 +1761,14 @@ function updateFilterStatus() {
   // filters the user sees, not the ones the last read ran under. A slider
   // drag rewrites it with the rest of the apply.
   $("api").textContent = apiMirror(S.search.tile, S.from, S.to, S.maxCloud, S.minCoverage);
+  paintDuck([S.search.tile, S.search.year, S.from, S.to,
+    S.maxCloud, S.minCoverage, S.sort]);
   const view = currentView();
-  $("rescount").textContent = `${view.length} of ${S.search.rows.length} scenes`;
+  const timing = timingLine(S.search);
+  $("rescount").replaceChildren(
+    el("span", "resn", `${view.length} of ${S.search.rows.length} scenes`),
+    el("span", "restime", timing.text));
+  $("rescount").title = timing.tip;
   say(`${view.length} of ${S.search.rows.length} ${S.search.tile} scenes in `
     + `${S.search.year} pass (${S.from} → ${S.to}, cloud ≤ ${S.maxCloud}, `
     + `coverage ≥ ${S.minCoverage}) — one year of parts range-read once, `
@@ -2016,6 +2071,91 @@ function apiMirror(tile, d0, d1, cc, cov) {
       limit: 30,
     },
   }, null, 2);
+}
+
+// The same answer as a query a reader can paste into DuckDB. The page does
+// not run it. It is here so the result list above can be reproduced, and
+// checked, without this page.
+//
+// Every gate is the SQL twin of one in results.js, so the two return the
+// same rows:
+//   * the date window is inclusive at both ends (filterRows t0/t1),
+//   * the coverage floor is a no-op at 0, and a NULL coverage always
+//     passes, because the floor never excludes what it cannot judge,
+//   * the sort carries the same tiebreak on id.
+// The source is the collection's own partition:glob with
+// hive_partitioning on, so `year` is a column read from the directory name
+// and the predicate on it prunes whole years before a byte is read. Naming
+// year=YYYY/ in the path instead opens the same files (measured at 1.28 s
+// against 1.32 s for one tile-year), and costs the reader the column: with
+// `year` in the WHERE, widening the search is one edit, `year BETWEEN
+// 2024 AND 2026`. A year's glob covers its archive part and its live
+// parts together, which is the set a search reads.
+function duckdbQuery(tile, year, d0, d1, cc, cov, sort, prep) {
+  const q = (c) => (/^[a-z_][a-z0-9_]*$/.test(c) ? c : `"${c}"`);
+  const tileCol = q(COL.tileColumn);
+  const cloud = '"eo:cloud_cover"';
+  const nodata = '"s2:nodata_pixel_percentage"';
+
+  const where = [
+    // First, because it is the partition predicate: it decides which files
+    // are opened, and it is the one a reader widens.
+    `year = ${year}`,
+    `${tileCol} = '${tile}'`,
+    `datetime BETWEEN '${d0}T00:00:00Z' AND '${d1}T23:59:59.999Z'`,
+    `${cloud} <= ${cc}`,
+  ];
+  if (cov > 0) where.push(`(${nodata} IS NULL OR 100 - ${nodata} >= ${cov})`);
+
+  const order = {
+    cloud: `${cloud}, id`,
+    coverage: `coverage DESC NULLS LAST, ${cloud}, id`,
+    date: "datetime DESC, id",
+  }[sort] ?? `${cloud}, id`;
+
+  // What the default keeps, each measured rather than assumed:
+  //   s3_url_style  the bucket name carries dots, so the default
+  //                 virtual-host URL fails its TLS check and nothing reads.
+  //   s3_region     without it DuckDB globs from the wrong region, prints a
+  //                 warning and retries, which costs a round-trip.
+  //   TimeZone      without it the timestamps print in the reader's zone and
+  //                 stop matching the dates on the cards.
+  // INSTALL and LOAD are what the toggle adds. DuckDB 1.5 autoloads httpfs
+  // on the first s3:// read, so they matter only to an older build.
+  const head = prep
+    ? ["-- DuckDB 1.5.0 or newer. INSTALL and LOAD are implicit from 1.5.",
+       "INSTALL httpfs; LOAD httpfs;",
+       "SET s3_region = 'us-west-2';  -- or DuckDB retries from the wrong one",
+       "SET s3_url_style = 'path';    -- required: the bucket name has dots",
+       "SET TimeZone = 'UTC';         -- print the instants the filter uses",
+       ""]
+    : ["SET s3_region = 'us-west-2';",
+       "SET s3_url_style = 'path';",
+       "SET TimeZone = 'UTC';",
+       ""];
+
+  return [
+    ...head,
+    `SELECT id, datetime, ${cloud} AS cloud, 100 - ${nodata} AS coverage`,
+    `FROM read_parquet('${PUBLIC_S3}/${COL.dir}/year=*/*.parquet',`,
+    "                  hive_partitioning = true)",
+    `WHERE ${where.join("\n  AND ")}`,
+    `ORDER BY ${order};`,
+  ].join("\n");
+}
+
+// Set once the sort control exists. restoreControls runs before that on
+// some paths, so the call there is guarded.
+let sortTip = null;
+
+// The pane and its setup toggle. The arguments are kept so flipping the
+// toggle repaints without a fresh search.
+let duckArgs = null;
+function paintDuck(args) {
+  if (args !== undefined) duckArgs = args;
+  $("duck").textContent = duckArgs
+    ? duckdbQuery(...duckArgs, $("duck-prep").checked)
+    : "";
 }
 
 const bboxOf = (r) => {
@@ -3327,8 +3467,10 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   // The mirror while the read runs. updateFilterStatus keeps it current from
   // the first rows on, but it cannot write it yet: S.search is null here.
   $("api").textContent = apiMirror(tile, S.from, S.to, S.maxCloud, S.minCoverage);
+  paintDuck([tile, year, S.from, S.to, S.maxCloud, S.minCoverage, S.sort]);
   say(`Range-reading tile ${tile}'s ${year} scenes…`);
   let got;
+  const askedAt = performance.now();
   try {
     got = await yearRows(tile, year);
   } catch (err) {
@@ -3341,6 +3483,7 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   if (!got.urls.length) {
     $("sql").textContent = "";
     $("api").textContent = "";
+    paintDuck(null);
     box.replaceChildren(el("p", "hint",
       `No published ${COLLECTION_ID} parts cover ${year}. Pick a year the backfill has reached.`));
     say(`Nothing published for ${year} in ${COLLECTION_ID} yet.`);
@@ -3352,7 +3495,12 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   scrubReady.clear();
   scrubReadyHd.clear();
   paintScrubTrack();
-  S.search = { tile, year, rows: got.rows, at: Date.now() };
+  // A fresh search reports the hyparquet read, which is the number the plan
+  // prints. A cache hit reports what the await actually cost.
+  const answeredIn = got.cached ? performance.now() - askedAt : got.ms;
+  readMs.push(answeredIn);
+  S.search = { tile, year, rows: got.rows, at: Date.now(),
+    ms: answeredIn, cached: got.cached };
   S.shown = 15;
   S.displayedId = null;
   S.detachedAt = 0;

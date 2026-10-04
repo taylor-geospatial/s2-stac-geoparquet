@@ -3,12 +3,16 @@
 // `node --test` runs them (results.test.mjs).
 const cmpId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
+// `label` names the column and fits the control. `tip` says which end of
+// it comes first, and the select carries the tip of whatever is chosen.
 export const SORTS = {
-  cloud: { label: "least cloud (clearest first)",
+  cloud: { label: "cloud", tip: "Least cloud first, so the clearest scene leads.",
     cmp: (a, b) => a.cloud - b.cloud || cmpId(a, b) },
-  coverage: { label: "most coverage (fullest first)",
+  coverage: { label: "coverage",
+    tip: "Most coverage first, so the fullest scene leads. A scene with no "
+      + "coverage figure sorts last.",
     cmp: (a, b) => (b.cover ?? -1) - (a.cover ?? -1) || a.cloud - b.cloud || cmpId(a, b) },
-  date: { label: "newest first",
+  date: { label: "date", tip: "Newest first.",
     cmp: (a, b) => b.t - a.t || cmpId(a, b) },
 };
 
