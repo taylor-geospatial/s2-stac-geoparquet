@@ -71,3 +71,17 @@ export function filterKeyOf(f, key, search) {
   return [search?.tile, search?.year, search?.at,
     f.t0, f.t1, f.maxCloud, f.minCoverage, key].join("|");
 }
+
+// Hold `caches` to `budget` entries between them, least recent cache first.
+// Each cache empties before the next one loses anything, because half a
+// scene's tiles would draw half a scene from memory. Returns the total kept.
+// app.js warms several scenes at once, and the tiles are what they cost.
+export function trimToBudget(caches, budget) {
+  let total = 0;
+  for (const c of caches) total += c.size;
+  for (const c of caches) {
+    if (total <= budget) break;
+    while (c.size && total > budget) { c.delete(c.keys().next().value); total--; }
+  }
+  return total;
+}
