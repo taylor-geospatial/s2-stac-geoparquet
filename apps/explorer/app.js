@@ -419,6 +419,27 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
 
+// MapLibre sizes its own canvas from the container (trackResize defaults to
+// true), and on a window dragged taller that was measured to miss. The canvas
+// held a 707x559 drawing buffer inside a 735x786 box, so the basemap stretched
+// to fill it, while deck.gl read the box and drew to the true size. The two
+// then placed the same tile 114 px apart, and no pan cleared it, because
+// neither camera had moved.
+//
+// Both listeners are public API and map.resize() is idempotent, so this costs
+// nothing on the resizes the built-in tracking does catch. The guard compares
+// the camera against the box first, which also stops the observer from seeing
+// its own work and calling itself.
+function syncCanvasToContainer() {
+  const box = map.getContainer();
+  const t = map.transform;
+  if (Math.round(t.width) === box.clientWidth
+    && Math.round(t.height) === box.clientHeight) return;
+  map.resize();
+}
+window.addEventListener("resize", syncCanvasToContainer);
+new ResizeObserver(syncCanvasToContainer).observe(map.getContainer());
+
 // The basemap's labels, on a switch beside the zoom buttons. Place names help
 // a reader place a scene, and they also sit over the imagery the reader came
 // to look at, so the choice is theirs. The switch hides every symbol layer of
