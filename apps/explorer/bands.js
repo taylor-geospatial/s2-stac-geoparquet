@@ -1,7 +1,8 @@
-// The band mapper's tables and pixel math (Task 28): which bands a Sentinel-2
-// L2A scene has, the presets, the SCL palette, the index ramps, the
-// histogram/percentile stats of an overview, and the painter that turns
-// per-pixel sample planes (cog.js) into RGBA through a stretch. No I/O here.
+// The band mapper's tables and sample statistics (Task 28): which bands a
+// Sentinel-2 L2A scene has, the presets, the SCL palette, the index ramps, and
+// the histogram and percentiles of an overview. No I/O here, and no painting:
+// the stretch these tables describe runs on the GPU (raster-modules.js), which
+// reads the ramps and the palette from here so there is one source for them.
 //
 // Sample values are the files' DN as stored: uint16 with DN/10000 =
 // reflectance for the reflectance bands (0 = nodata; processing baselines
@@ -100,39 +101,6 @@ export function bandsOf(spec) {
   return [...new Set(spec.bands)];
 }
 
-// The stretch is a 1024-entry lookup from the normalised value t in 0..1 to
-// a byte: the curve first (linear t; sqrt; log10(1 + 9t), which keeps 0 -> 0
-// and 1 -> 1), then gamma as t^(1/gamma), so gamma above 1 brightens the
-// mid-tones, as in most raster viewers.
-const LUT_N = 1024;
-export function makeLut(curve = "linear", gamma = 1) {
-  const lut = new Uint8ClampedArray(LUT_N);
-  const g = 1 / Math.max(0.05, Number(gamma) || 1);
-  for (let i = 0; i < LUT_N; i++) {
-    let t = i / (LUT_N - 1);
-    if (curve === "sqrt") t = Math.sqrt(t);
-    else if (curve === "log") t = Math.log10(1 + 9 * t);
-    lut[i] = Math.round(255 * Math.pow(t, g));
-  }
-  return lut;
-}
-
-const hex = (c) => [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16)];
-// A 256-entry RGB table through the ramp's stops, evenly spaced.
-export function rampTable(stops) {
-  const rgb = stops.map(hex), out = new Uint8ClampedArray(256 * 3);
-  for (let i = 0; i < 256; i++) {
-    const f = (i / 255) * (rgb.length - 1), j = Math.min(rgb.length - 2, Math.floor(f)), t = f - j;
-    for (let c = 0; c < 3; c++) out[i * 3 + c] = rgb[j][c] * (1 - t) + rgb[j + 1][c] * t;
-  }
-  return out;
-}
-const SCL_TABLE = (() => {
-  const t = new Uint8ClampedArray(256 * 3);
-  for (const [v, , c] of SCL_CLASSES) t.set(hex(c), v * 3);
-  return t;
-})();
-
 // Histogram and percentiles of one band's overview: the file's nodata (0)
 // is left out of the count, so an empty swath edge cannot pull the 2nd
 // percentile to zero. 64 bins over the data's own min..max; p2/p98 by a
@@ -172,70 +140,4 @@ function histogram(values, lo, hi) {
     bins[Math.min(HIST_BINS - 1, Math.floor(((values[i] - lo) / span) * HIST_BINS))]++;
   }
   return bins;
-}
-
-// The lookup tables a spec paints through — built once per layer, not
-// once per tile.
-export function paintTables(spec) {
-  return { lut: makeLut(spec.curve, spec.gamma),
-    ramp: spec.kind === "index" ? rampTable(INDICES[spec.index].ramp) : null };
-}
-
-// Paint W x H RGBA from the planes a spec needs. `planes` maps band name ->
-// Float32Array (W*H, NaN off the scene) or null for a band that could not be
-// read (its channel paints black; the others still show). Channels are
-// {band|index, min, max}; `nodata` is the sample value keyed out (0, the
-// files' own) or null for none. Off-scene (NaN) is always transparent.
-export function paintRGBA(planes, spec, W, H, { lut, ramp } = paintTables(spec)) {
-  const out = new Uint8ClampedArray(W * H * 4);
-  const nd = spec.nodata === null || spec.nodata === undefined ? NaN : Number(spec.nodata);
-  const N = W * H;
-  if (spec.kind === "scl") {
-    const p = planes[spec.bands[0]];
-    if (!p) return new ImageData(out, W, H);
-    for (let i = 0; i < N; i++) {
-      const v = p[i];
-      if (v !== v || v === nd) continue;            // NaN or nodata: see-through
-      const k = Math.min(255, Math.max(0, v | 0)) * 3, o = i * 4;
-      out[o] = SCL_TABLE[k]; out[o + 1] = SCL_TABLE[k + 1]; out[o + 2] = SCL_TABLE[k + 2]; out[o + 3] = 255;
-    }
-    return new ImageData(out, W, H);
-  }
-  if (spec.kind === "index") {
-    const ix = INDICES[spec.index], a = planes[ix.a], b = planes[ix.b];
-    const ch = spec.channels[0], off = spec.offset || 0;
-    const lo = ch.min, scale = 255 / ((ch.max - ch.min) || 1e-9);
-    if (!a || !b) return new ImageData(out, W, H);
-    for (let i = 0; i < N; i++) {
-      const av = a[i], bv = b[i];
-      if (av !== av || bv !== bv || av === nd || bv === nd) continue;
-      const x = av - off, y = bv - off, v = (x - y) / (x + y);
-      if (v !== v) continue;                       // 0/0 at a fully dark pixel
-      let t = (v - lo) * scale;
-      t = t < 0 ? 0 : t > 255 ? 255 : t;
-      const k = (t | 0) * 3, o = i * 4;
-      out[o] = ramp[k]; out[o + 1] = ramp[k + 1]; out[o + 2] = ramp[k + 2]; out[o + 3] = 255;
-    }
-    return new ImageData(out, W, H);
-  }
-  // gray (one channel to all three) or rgb.
-  const chans = spec.kind === "gray" ? [0, 0, 0].map(() => spec.channels[0]) : spec.channels;
-  const src = chans.map((c) => planes[c.band] ?? null);
-  const lo = chans.map((c) => c.min), sc = chans.map((c) => (LUT_N - 1) / ((c.max - c.min) || 1e-9));
-  for (let i = 0; i < N; i++) {
-    const o = i * 4;
-    let seen = false, drop = false;
-    for (let c = 0; c < 3; c++) {
-      const p = src[c];
-      if (!p) { out[o + c] = 0; continue; }
-      const v = p[i];
-      if (v !== v || v === nd) { drop = true; break; }
-      seen = true;
-      let t = (v - lo[c]) * sc[c];
-      t = t < 0 ? 0 : t > LUT_N - 1 ? LUT_N - 1 : t;
-      out[o + c] = lut[t | 0];
-    }
-    if (seen && !drop) out[o + 3] = 255;
-  }
-  return new ImageData(out, W, H);
 }

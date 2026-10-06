@@ -17,6 +17,12 @@ Two served variants of the app come from the same repository files.
   candidate/  apps/explorer/* exactly as the working tree has it
   baseline/   the same, with `search.js` replaced by git HEAD's
 
+The app is bundled, so each variant is built with Vite before it is served.
+The script copies apps/explorer to a temporary directory per variant, writes
+that variant's `search.js` and the patched `app.js` into the copy, links the
+installed `node_modules`, runs `npm run build`, and serves the `dist` tree.
+Run `npm install` in apps/explorer first.
+
 `app.js` has `window.__map =` and `window.__hit =` inserted into its map
 constructor and its hit index. Both variants carry these insertions. Both
 are module-local consts. A headless driver has no mouse. Nothing else is
@@ -181,6 +187,56 @@ else {
 """
 
 
+# Where the per-variant builds go. One directory per variant, reused across
+# runs so a second run only pays for the bundle, not for the copy.
+BUILD_ROOT = HERE / ".check_app_builds"
+APP = REPO / "apps/explorer"
+
+
+def guess_type(path: Path) -> str:
+    """The content type for a built asset. Vite emits a small, fixed set."""
+    return {
+        ".js": "text/javascript", ".mjs": "text/javascript",
+        ".css": "text/css", ".json": "application/json",
+        ".map": "application/json", ".wasm": "application/wasm",
+        ".html": "text/html", ".svg": "image/svg+xml",
+        ".png": "image/png", ".webp": "image/webp",
+    }.get(path.suffix, "application/octet-stream")
+
+
+def build_variant(variant: str, search_js: bytes, app_js: bytes) -> Path:
+    """Bundle one variant of the app and return its dist directory.
+
+    The app imports deck.gl, luma.gl and @developmentseed/deck.gl-geotiff by
+    bare specifier, and those three must share one copy of their internals, so
+    the page cannot be served from the source tree any more. Each variant is
+    built from a copy of apps/explorer with its own `search.js`.
+    """
+    if not (APP / "node_modules").is_dir():
+        raise SystemExit("apps/explorer/node_modules is missing — "
+                         "run `npm install` in apps/explorer first")
+    work = BUILD_ROOT / variant
+    if work.exists():
+        shutil.rmtree(work)
+    work.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(APP, work, ignore=shutil.ignore_patterns(
+        "node_modules", "dist", ".check_app_builds"))
+    # The install is shared: a copy per variant would cost minutes.
+    (work / "node_modules").symlink_to(APP / "node_modules", target_is_directory=True)
+    (work / "search.js").write_bytes(search_js)
+    (work / "app.js").write_bytes(app_js)
+    print(f"  building {variant}…", flush=True)
+    proc = subprocess.run(["npm", "run", "build"], cwd=work,
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise SystemExit(f"{variant} build failed:\n{proc.stdout[-4000:]}\n"
+                         f"{proc.stderr[-4000:]}")
+    dist = work / "dist"
+    if not (dist / "index.html").is_file():
+        raise SystemExit(f"{variant} build produced no index.html in {dist}")
+    return dist.resolve()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--port", type=int, default=8787)
@@ -203,7 +259,8 @@ def main() -> None:
                              f"update check_app.py")
         src = src.replace(needle, with_, 1)
     app_js = src.encode()
-    served = {"baseline": baseline, "candidate": candidate}
+    builds = {v: build_variant(v, js, app_js)
+              for v, js in (("baseline", baseline), ("candidate", candidate))}
     # A module that throws while it evaluates throws before the driver can
     # attach a listener to the frame, so the reporter goes in the page.
     reporter = ("<script>"
@@ -211,8 +268,14 @@ def main() -> None:
                 "addEventListener('error',e=>p(e.message+' @'+e.filename+':'+e.lineno));"
                 "addEventListener('unhandledrejection',e=>p('rejection '+e.reason));"
                 "</script>\n")
-    index_html = (REPO / "apps/explorer/index.html").read_text().replace(
-        "</head>", reporter + "</head>", 1).encode()
+    # Vite rewrites index.html to point at the hashed bundle, and those paths
+    # are relative (`base: "./"`), so each variant's own copy is served under
+    # its own /appvar/<variant>/ prefix and resolves to that build's assets.
+    index_html = {
+        v: (d / "index.html").read_text().replace(
+            "</head>", reporter + "</head>", 1).encode()
+        for v, d in builds.items()
+    }
 
     cases = []
     for label, collection, lng, lat, window in CASES:
@@ -261,14 +324,17 @@ def main() -> None:
                                   "application/json")
             if path.startswith("/appvar/"):
                 _, _, variant, name = path.split("/", 3)
-                if name == "search.js":
-                    return self._send(served[variant], "text/javascript")
-                if name == "app.js":
-                    return self._send(app_js, "text/javascript")
+                if variant not in builds:
+                    self.send_error(404)
+                    return None
                 if name == "index.html":
-                    return self._send(index_html, "text/html")
-                self.path = "/apps/explorer/" + name
-                return super().do_GET()
+                    return self._send(index_html[variant], "text/html")
+                # Everything else is a built asset of that variant.
+                target = (builds[variant] / name).resolve()
+                if builds[variant] not in target.parents or not target.is_file():
+                    self.send_error(404)
+                    return None
+                return self._send(target.read_bytes(), guess_type(target))
             return super().do_GET()
 
         def do_POST(self):

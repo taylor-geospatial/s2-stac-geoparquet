@@ -2,6 +2,11 @@ name: pages
 
 # Publish the explorer app to GitHub Pages. It reads the PUBLISHED catalog by
 # default, so the hosted copy needs no configuration.
+#
+# The app is bundled before it is uploaded. deck.gl, luma.gl and
+# @developmentseed/deck.gl-geotiff must share one copy of their internals, and
+# a bundler is the only way to guarantee that. apps/explorer/vite.config.js
+# says why. The harnesses under apps/explorer/test are not in this build.
 
 on:
   push:
@@ -29,8 +34,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/explorer/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: apps/explorer
+      - name: Build
+        run: npm run build
+        working-directory: apps/explorer
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: apps/explorer
+          path: apps/explorer/dist
       - id: deploy
         uses: actions/deploy-pages@v4

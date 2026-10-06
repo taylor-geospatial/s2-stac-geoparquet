@@ -35,29 +35,27 @@
 // map is MapLibre for the camera; the tiles are drawn by deck.gl
 // interleaved into the same canvas (Task 20), because MapLibre's per-feature
 // state and filter changes re-parse the 33k-polygon tile on every update.
-import maplibregl from "https://esm.sh/maplibre-gl@4.7.1";
-import { PMTiles, Protocol } from "https://esm.sh/pmtiles@3.2.0";
-import { parse } from "https://esm.sh/@loaders.gl/core@4.5.1";
-import { MVTLoader } from "https://esm.sh/@loaders.gl/mvt@4.5.1";
-import { cogTileLayer, previewImage, previewLayer, openScene, sceneCog, loadOverviews,
-  sceneIndexStats, bandPreviewImage, bandTileLayer, tciOverviewImage } from "./cog.js";
+import { GeoJsonLayer } from "@deck.gl/layers";
+import { MVTLayer } from "@deck.gl/geo-layers";
+import { MapboxOverlay } from "@deck.gl/mapbox";
+import { parse } from "@loaders.gl/core";
+import { MVTLoader } from "@loaders.gl/mvt";
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import { PMTiles, Protocol } from "pmtiles";
+import { canSampleUint16, cogTileLayer, previewImage, previewLayer, openScene, sceneCog,
+  loadOverviews, sceneIndexStats, bandPreviewImage, bandTileLayer,
+  tciOverviewImage } from "./cog.js";
 import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSES, PRESETS,
   bandsOf, HIST_BINS } from "./bands.js";
 import { dayRange, valueRange } from "./rangeslider.js";
 import { sceneRows, warmPart, readTable, keyedRows } from "./search.js";
 import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
-// deck.gl comes from its pinned dist bundle (index.html), not an ESM CDN
-// transpile: the esm.sh build draws but cannot pick. One bundle, one luma.gl.
-// A classic script that failed to load is a missing global, not an import
-// error, so it is checked here and said out loud rather than thrown.
-if (!window.deck?.MapboxOverlay) {
-  const el = document.getElementById("status");
-  el.textContent = "deck.gl did not load (cdn.jsdelivr.net/npm/deck.gl@9.4.0/dist.min.js is "
-    + "blocked or unreachable) — the map cannot be drawn. Reload once the CDN is reachable.";
-  el.classList.add("error");
-  throw new Error("deck.gl bundle missing");
-}
-const { MapboxOverlay, GeoJsonLayer, MVTLayer } = window.deck;
+// deck.gl, luma.gl and @developmentseed/deck.gl-geotiff are bundled into this
+// module by Vite, so there is one copy of each. The raster layers build
+// luma.gl textures and hand them to the shader pipeline this page's own Deck
+// instance runs, and a second copy of @luma.gl/core gives two class
+// identities and textures that do not bind. See vite.config.js.
 
 // ?base=http://localhost:8081 points the whole app at a local publish tree,
 // which is how it is developed before the bucket is populated.
@@ -662,7 +660,7 @@ let lookup = new Map();
 let paintKey = 0;
 let hovered = null;          // the hovered feature (GeoJSON, WGS84) or null
 let cogLayer = null;         // the shown scene's TileLayer, or null
-let cogPreview = null;       // its thumbnail warp, beneath the tiles until they load
+let cogPreview = null;       // its thumbnail rung, beneath the tiles until they load
 let scrubLayer = null;       // the scrub bar's live thumbnail preview, or null
 
 // The one state object. Every mutator writes here and calls scheduleApply;
@@ -2425,7 +2423,7 @@ function setTip(el, text) {
 }
 
 // The thumbnail bitmap alone, decoded once per scene id and cached: the
-// warp builder below needs it, and so does the neighbour prefetch.
+// preview builder below needs it, and so does the neighbour prefetch.
 const thumbBitmaps = new Map();
 const THUMB_BITMAPS_MAX = 40;
 function thumbBitmapFor(row) {
@@ -2438,14 +2436,14 @@ function thumbBitmapFor(row) {
   return thumbBitmaps.get(row.id);
 }
 
-// The scrub preview is the same warped image the committed scene shows
-// (cog.js's previewImage, over the scene's UTM grid via previewLayer): a
-// partial granule registers exactly instead of stretching flat over the
-// full footprint square, and nodata is masked the same way. The map below
-// caches the warp per scene id, so the cost — one ~64 KiB TCI header read —
-// falls once per scene the user pauses on, not once per drag frame.
+// The scrub preview is the same image the committed scene shows (cog.js's
+// previewImage, reprojected over the scene's UTM grid by previewLayer): a
+// partial granule registers exactly instead of stretching flat over the full
+// footprint square, and nodata is keyed out the same way. The map below caches
+// the preview per scene id, so the cost — one ~64 KiB TCI header read — falls
+// once per scene the user pauses on, not once per drag frame.
 // An entry is {img, cog, thumb, hd}: `img` is what goes on the map and `hd`
-// says which rung it is on. The thumbnail warp is kept as `thumb` even after
+// says which rung it is on. The thumbnail rung is kept as `thumb` even after
 // the upgrade below replaces `img`, so a downgrade costs nothing — it is the
 // same object the entry was born with, not a second copy.
 const scrubPreviews = new Map();
@@ -2456,7 +2454,7 @@ const scrubPreviews = new Map();
 const scrubReady = new Set();
 // The subset whose `img` is the mid-resolution overview (Task 25). A member
 // is always a scrubReady member too: nothing is upgraded before its
-// thumbnail warp exists. Insertion-ordered, which is what the HD cap below
+// thumbnail rung exists. Insertion-ordered, which is what the HD cap below
 // evicts by.
 const scrubReadyHd = new Set();
 const SCRUB_PREVIEWS_MAX = 120;
@@ -2523,7 +2521,7 @@ function paintScrubTrack() {
     if (!view.length) { scrub.style.setProperty("--scrub-fill", "none"); return; }
     const len = view.length;
     // Three states per index, not two (Task 25): 0 nothing yet, 1 the
-    // thumbnail warp is ready, 2 the mid-resolution overview is. The HD set
+    // thumbnail rung is ready, 2 the mid-resolution overview is. The HD set
     // is checked first because it is a subset of scrubReady. Runs merge on
     // equal state exactly as they did on equal loadedness, so the span
     // formula and the shared hard stops are untouched — only the number of
@@ -2590,13 +2588,14 @@ async function prefetchScrubStack() {
 // prefetchSeq — a new search or view-key change abandons this queue within
 // one await exactly as it does the thumbnail pass.
 //
-// The cap is on resident HD images, not on reads: `order` is outward from the
-// shown position, so the first SCRUB_HD_MAX rows of it are the nearest ones,
-// and capScrubHd below prunes what earlier queues (a different position, a
-// different filter) left behind. A ~1372 x 1372 RGBA image is ~7.5 MB, so 20
-// of them is ~150 MB worst case — the same order as the COG plane cache's
-// ~100 MB, and on top of the thumbnail warps the 120-entry cache already
-// holds (~4 MB each at 1024 px, and a downgrade hands one of those back).
+// The cap is on resident HD reads, not on reads issued: `order` is outward
+// from the shown position, so the first SCRUB_HD_MAX rows of it are the
+// nearest ones, and capScrubHd below prunes what earlier queues (a different
+// position, a different filter) left behind. A rung now holds the overview's
+// own samples, not an RGBA warp of them: a 1372 x 1372 TCI level is ~5.6 MB
+// of uint8, so 20 of them is ~110 MB worst case. The thumbnail rung costs
+// almost nothing, because it keeps the ImageBitmap the results grid already
+// decoded instead of a warped copy of it.
 const SCRUB_HD_MAX = 20;
 // The entry whose `img` the current scrubLayer was built from, or null. Only
 // ever read together with `scrubLayer`, which every clear path nulls — so a
@@ -2634,7 +2633,7 @@ async function upgradeScrubPreview(row, seq) {
   scrubReadyHd.add(id);
   capScrubHd();
   paintScrubTrack();
-  // If this scene's thumbnail warp is what the map is showing right now — a
+  // If this scene's thumbnail rung is what the map is showing right now — a
   // drag preview, or the bridge a commit left up — rebuild the layer under
   // the same id so deck.gl swaps the bitmap in place instead of adding a
   // second layer. The two conditions are read here, after every await, not
@@ -2648,8 +2647,8 @@ async function upgradeScrubPreview(row, seq) {
   }
 }
 
-// Downgrade-evict the oldest HD images over the cap: back to the thumbnail
-// warp the entry kept, or — if the entry is gone from the cache entirely —
+// Downgrade-evict the oldest HD reads over the cap: back to the thumbnail
+// rung the entry kept, or — if the entry is gone from the cache entirely —
 // just out of the set. A deck.gl layer already built from an evicted HD
 // image holds its own reference, so a downgrade never blanks or coarsens
 // what is on the map; it only stops the cache from handing that image out
@@ -2686,8 +2685,8 @@ async function previewIndex(i) {
   const p = await scrubPreviewFor(row);
   if (seq !== scrubSeq) return;
   // A null build (no thumbnail, a CORS failure, a COG open failure) leaves
-  // whatever the scrub layer already shows — never a raw, unwarped bitmap;
-  // that mismatch is the jitter this warp exists to remove.
+  // whatever the scrub layer already shows — never a raw, unreprojected
+  // bitmap; that mismatch is the jitter this reprojection exists to remove.
   if (p) {
     // p.img is whichever rung this entry has reached — the thumbnail warp, or
     // the mid-resolution overview if the upgrade queue has already got here.
@@ -2925,13 +2924,26 @@ async function showBandsLoaded(me, spec, serial, failed) {
   if (me.missing.length) {
     say(`${me.missing.join(", ")} of ${id} could not be opened (${failed[0][1].message}) — `
       + `showing ${spec.label} without ${me.missing.length > 1 ? "them" : "it"}.`, true);
+  } else if (uint16Unsupported(me, spec)) {
+    // Say it, because the alternative is a black image and no reason given.
+    say(`This browser's renderer cannot sample 16-bit textures `
+      + `(no EXT_texture_norm16), so ${spec.label} comes out black. True colour `
+      + `(TCI) and SCL classes are 8-bit and still work.`, true);
   }
   tilesSettled();
 }
 
-// Only the stretch changed: the same tiles repainted from their cached
-// planes (a new layer instance with the same id and a new style key), and
-// the preview repainted if it is still under them.
+// True when the spec needs a 16-bit band and the renderer cannot sample one
+// (cog.js's canSampleUint16). Every reflectance band is uint16; SCL is uint8.
+function uint16Unsupported(me, spec) {
+  if (canSampleUint16()) return false;
+  return spec.bands.some((band) => (me.scene.overviews.get(band)?.value?.cog?.bits ?? 8) > 8);
+}
+
+// Only the stretch changed. The stretch is shader uniforms now, so this costs
+// no reads and no repaint of a tile: a new layer instance under the same id
+// carries the new min, max, curve, gamma and nodata to the GPU, and the
+// preview under the tiles gets the same treatment.
 function restyle(me, spec) {
   me.spec = spec;
   syncPanel(spec, me);
