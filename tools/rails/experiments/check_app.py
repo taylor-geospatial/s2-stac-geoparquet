@@ -138,20 +138,22 @@ else {
     }
     // A tile click is the search. There is no run button to poll. The app
     // ignores a click that names no tile. The loop below fires clicks until
-    // one takes. The signal is the hint the click handler writes (for
-    // example "Tile 31UFT."). Once the hint names a tile, the fire loop
-    // stops. The driver then waits for the plan text in #sql.
-    const tileHint = () => $("query").querySelector(".hint")?.textContent || "";
+    // one takes. The signal is the selection box the click handler fills:
+    // #sel-tile-row leaves `hidden` and names the tile. Once it does, the
+    // fire loop stops. The driver then waits for the plan text in #sql.
+    const tileHint = () => ($("sel-tile-row").hidden ? ""
+      : $("sel-tile-row").textContent || "");
     let fired = 0;
     await until("a tile under the click", () => {
-      if (/\\bTile \\d/.test(tileHint())) return true;
+      if (/\\bTile\\s+\\d/.test(tileHint())) return true;
       fired += 1;
       if (fired % 40 === 0) say(`  still no tile after ${fired} click(s)`);
       w.__map.fire("click", { lngLat: { lng: c.lng, lat: c.lat,
         wrap: () => ({ lng: c.lng, lat: c.lat }) } });
       return false;
     }, 120000);
-    say(`  clicked after ${fired} attempt(s): ${tileHint().trim()}`);
+    say(`  clicked after ${fired} attempt(s): `
+      + tileHint().replace(/\\s+/g, " ").trim());
     // A finished search writes the plan into #sql. It also writes the cards
     // into #results. A search that finds nothing writes a .hint instead.
     try {
@@ -165,10 +167,10 @@ else {
       say(`  sql: ${($("sql").textContent || "").slice(0, 200)}`);
       throw e;
     }
-    out.tile = ($("query").querySelector(".hint")?.textContent || "").trim();
+    out.tile = tileHint().replace(/\\s+/g, " ").trim();
     out.plan = $("sql").textContent;
     out.ids = (w.S2 && w.S2.viewIds ? w.S2.viewIds()
-      : [...$("results").querySelectorAll(".card b, b")].map((b) => b.textContent.trim()))
+      : [...$("results").querySelectorAll(".scene b, b")].map((b) => b.textContent.trim()))
       .filter((t) => /^S2[A-Z]/.test(t)).slice(0, 30);
     say(`  ${out.ids.length} row(s): ${out.ids.slice(0, 3).join(", ")}`);
   } catch (e) {

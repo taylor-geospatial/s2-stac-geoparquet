@@ -2316,12 +2316,17 @@ Object.defineProperties(window.S2, { shown: { get: () => shown }, ui: { value: u
 
 // The preview comes off once the tile layer has every tile of the resting
 // viewport. onViewportLoad fires mid-flight too (each coarse view the camera
-// passes through loads), so while the map moves this waits for its moveend
-// and asks the layer itself. A later pan re-fires onViewportLoad; once
-// settled there is nothing left to do.
+// passes through loads), so while the map moves this waits for its moveend.
+// What it then reads is `shown.tilesLoaded`, which the layer's own
+// onViewportLoad event set (eventsFor). The module-level `cogLayer` cannot
+// answer this: render() hands deck a CLONE of it (underLabels), so the
+// instance held here never enters deck and its isLoaded is false forever —
+// reading it left the bar on "loading full resolution…" for good whenever
+// the tiles landed during the commit's fitBounds flight, which they now
+// always do.
 function tilesSettled() {
   if (!shown || shown.settled || shown.failed || !cogLayer) return;
-  if (map.isMoving() || !cogLayer.isLoaded) return;
+  if (map.isMoving() || !shown.tilesLoaded) return;
   shown.settled = true;
   cogPreview = null;
   scrubLayer = null;
@@ -2605,6 +2610,17 @@ let scrubShown = null;
 async function upgradeScrubStack(order, seq) {
   for (let n = 0; n < order.length && n < SCRUB_HD_MAX; n++) {
     if (seq !== prefetchSeq) return;
+    // A committed scene owns the connection pool until it settles: these
+    // reads share the COG host with the committed scene's tiles, and a
+    // 20-scene stack of overview reads in front of them is what made a
+    // commit sit on its blurry preview for the length of the whole queue.
+    // The wait is bounded so a load that neither settles nor fails (a tile
+    // stuck in a proxy, say) cannot park the queue forever.
+    const waitUntil = Date.now() + 30000;
+    while (shown && !shown.settled && !shown.failed && Date.now() < waitUntil) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (seq !== prefetchSeq) return;
+    }
     await upgradeScrubPreview(order[n], seq);
   }
 }
@@ -2875,7 +2891,7 @@ function scheduleRestyle() {
 async function showBands(me, spec, serial) {
   const { id } = me;
   me.bandsKey = spec.bands.join("+"); me.spec = spec;
-  me.settled = false; me.failed = false;
+  me.settled = false; me.failed = false; me.tilesLoaded = false;
   me.loading = true;
   cogLayer = null; cogPreview = null; render();
   syncPanel(spec, me);
@@ -2962,7 +2978,7 @@ function restyle(me, spec) {
 async function showTci(me, spec, serial) {
   const { id, r } = me;
   me.bandsKey = "TCI"; me.missing = [];
-  me.settled = false; me.failed = false;
+  me.settled = false; me.failed = false; me.tilesLoaded = false;
   cogLayer = null; cogPreview = null; render();
   cogbar(id, "loading", "Loading preview…");
   say(`Preview of ${id} (True color) — loading full-resolution tiles…`);
@@ -3008,7 +3024,8 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   // A chip on the scene already shown keeps what it has read and set.
   const prev = shown?.id === id ? shown : null;
   const me = shown = { id, r, t0: performance.now(), serial: 0, bandsKey: null, spec: null,
-    settled: false, failed: false, missing: [], ranges: prev?.ranges ?? new Map(),
+    settled: false, failed: false, tilesLoaded: false, missing: [],
+    ranges: prev?.ranges ?? new Map(),
     offset: offsetOf(r), scene: prev?.scene ?? null, bitmapP: prev?.bitmapP ?? null,
     loading: false, eventsFor: null };
   const bbox = bboxOf(r);
@@ -3036,6 +3053,7 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
     },
     onViewportLoad: () => {
       if (me !== shown || key !== me.bandsKey) return;
+      me.tilesLoaded = true;
       debug(`[cog] ${id} ${key} viewport loaded at ${(performance.now() - me.t0).toFixed(0)} ms`);
       tilesSettled();
     },

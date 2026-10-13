@@ -138,7 +138,9 @@ export function canSampleUint16() {
 // dozen sequential round trips instead.
 // ---------------------------------------------------------------------------
 export async function openCog(href, signal) {
-  const geotiff = await GeoTIFF.fromUrl(href, { chunkSize: 65536, cacheSize: 100, signal });
+  // cacheSize is bytes, not chunks: SourceCache counts the bytes it holds.
+  // The default (8 MB) keeps every header chunk a scene's five bands need.
+  const geotiff = await GeoTIFF.fromUrl(href, { chunkSize: 65536, signal });
   const crs = geotiff.crs;
   if (typeof crs !== "number") {
     throw new Error(`${href} carries an inline CRS; only Sentinel-2 UTM grids are supported`);
@@ -302,10 +304,10 @@ export function cogTileLayer(cog, id = "cog", events = {}) {
   });
 }
 
-// One scene's composite. `styleKey` no longer forces a repaint: the stretch is
-// uniforms, so a new min, curve, gamma or nodata reaches the shader on the
-// next frame without refetching or repainting a tile. It stays in the
-// signature because app.js keys its layer ids on it.
+// One scene's composite. `styleKey` no longer forces a refetch: the stretch
+// is uniforms, so a new min, curve, gamma or nodata costs no read. It rides
+// the renderTile updateTrigger, which is how a restyle reaches tiles whose
+// textures already sit on the GPU.
 export function bandTileLayer(scene, spec, styleKey, id, events = {}) {
   const { kind } = scene && spec;
   if (kind === "scl" || kind === "tci") {
@@ -324,8 +326,18 @@ export function bandTileLayer(scene, spec, styleKey, id, events = {}) {
   const order = channelBands(spec);
   const opened = bandsOf(spec).filter((band) => settledCog(scene, band));
   if (!opened.length) return null;
-  const sources = Object.fromEntries(opened.map((band) =>
-    [band, { url: bandHref(scene.dir, band) }]));
+  // One `sources` object per band set, kept on the scene: MultiCOGLayer
+  // compares the prop by identity, and a fresh object on every call made a
+  // restyle reopen every COG and refetch every tile — the exact cost the
+  // uniform stretch exists to avoid. The styleKey updateTrigger below is
+  // what carries a restyle to tiles that are already on the GPU.
+  const sourcesKey = opened.join("+");
+  let sources = scene.sources.get(sourcesKey);
+  if (!sources) {
+    sources = Object.fromEntries(opened.map((band) =>
+      [band, { url: bandHref(scene.dir, band) }]));
+    scene.sources.set(sourcesKey, sources);
+  }
   const pick = (band) => (band && opened.includes(band) ? band : undefined);
   const composite = kind === "index"
     ? { r: pick(order[0]), g: pick(order[1]) }
@@ -341,6 +353,7 @@ export function bandTileLayer(scene, spec, styleKey, id, events = {}) {
     renderPipeline: [kind === "index"
       ? indexModule(spec, { valueScale })
       : stretchModule(spec, { valueScale, active })],
+    updateTriggers: { renderTile: styleKey },
     ...tileProps(scene.bounds, events),
   });
 }
@@ -352,13 +365,21 @@ class SingleBandLayer extends CompositeLayer {
   static layerName = "SingleBandLayer";
 
   renderLayers() {
-    const { cog, spec, sampler } = this.props;
+    const { cog, spec, sampler, extent, minZoom, maxZoom, maxRequests,
+      refinementStrategy, epsgResolver, onViewportLoad, onTileError } = this.props;
     const pipeline = spec.kind === "scl"
       ? [sclModule(spec, { valueScale: cog.valueScale, device: this.context.device })]
       : [tciModule(cog)];
+    // getSubLayerProps forwards only deck's common props, so the tile props
+    // and the tile events go through by hand. Without them the inner layer
+    // ran ungated (no extent, no zoom window, default epsg resolver asking
+    // epsg.io) and its onViewportLoad never reached the app, so an SCL view
+    // never settled.
     return new COGLayer(this.getSubLayerProps({
       id: "cog",
       geotiff: cog.geotiff,
+      extent, minZoom, maxZoom, maxRequests, refinementStrategy, epsgResolver,
+      onViewportLoad, onTileError,
       ...singleSourcePipeline(cog, sampler, pipeline),
     }));
   }
@@ -619,7 +640,8 @@ function textureProps(cog, array, sampler) {
 export const bandHref = (dir, band) => `${dir}/${band}.tif`;
 
 export function openScene(id, dir) {
-  return { id, dir, bounds: null, cogs: new Map(), overviews: new Map() };
+  return { id, dir, bounds: null, cogs: new Map(), overviews: new Map(),
+    sources: new Map() };
 }
 
 // One band's COG, opened once per scene. The first to open sets the scene's
