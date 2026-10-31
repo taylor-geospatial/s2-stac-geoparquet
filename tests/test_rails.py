@@ -29,7 +29,7 @@ SCRIPTS = SBATCH + [RAILS / "build_ready_years.sh"]
 EXPECTED_SBATCH = {"audit_year", "build_year", "catchup", "fetch_months",
                    "fold_live", "repair_month", "upload_year"}
 BUCKET_ARN = "arn:aws:s3:::us-west-2.opendata.source.coop"
-OBJECTS_ARN = f"{BUCKET_ARN}/portolan-mirrors/sentinel-2-catalog/*"
+OBJECTS_ARN = f"{BUCKET_ARN}/tge-labs/s2-stac-geoparquet/*"
 
 
 def _bash(script: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
@@ -111,7 +111,7 @@ def test_smoke_keeps_every_path_under_smoke():
     up = _bash(RAILS / "upload_year.sbatch", _dry_env(SMOKE="1", PUBLISH="/p"))
     assert up.returncode == 0, up.stdout + up.stderr
     assert "--data-dir /p/_smoke --key-prefix _smoke sentinel-2-c1-l2a/year=2017/items.parquet" in up.stdout
-    assert "sentinel-2-catalog/_smoke/sentinel-2-c1-l2a/year=2017/items.parquet" in up.stdout
+    assert "s2-stac-geoparquet/_smoke/sentinel-2-c1-l2a/year=2017/items.parquet" in up.stdout
 
 
 def test_build_year_refuses_a_short_year_outside_dry_run():
@@ -423,7 +423,7 @@ def test_upload_plans_keys_under_the_catalog_prefix():
         year.mkdir(parents=True)
         (year / "items.parquet").write_bytes(b"p" * 10)
         (year / "notes.txt").write_text("no")
-        prefix = "portolan-mirrors/sentinel-2-catalog"
+        prefix = "tge-labs/s2-stac-geoparquet"
         [u] = upload.plan_uploads(base, ["sentinel-2-c1-l2a/year=2019/items.parquet"], prefix)
         assert u.key == f"{prefix}/sentinel-2-c1-l2a/year=2019/items.parquet"
         assert u.content_type == "application/vnd.apache.parquet"
@@ -460,7 +460,7 @@ def test_upload_main_uses_the_profile_and_the_real_write_prefix(capsys):
         rc = upload.main(["--data-dir", td, "--profile", "source-coop",
                           "sentinel-2-c1-l2a/year=2019/items.parquet"], client=s3)
     assert rc == 0
-    assert s3.puts == [("portolan-mirrors/sentinel-2-catalog/sentinel-2-c1-l2a/year=2019/items.parquet",
+    assert s3.puts == [("tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/year=2019/items.parquet",
                         "application/vnd.apache.parquet")]
     out = capsys.readouterr().out
     assert "profile: source-coop" in out and "1 uploaded, 0 skipped" in out
@@ -476,7 +476,7 @@ def test_iam_policy_names_only_the_catalog_prefix():
     by_resource = {s["Resource"]: s for s in policy["Statement"]}
     lst = by_resource[BUCKET_ARN]
     assert lst["Action"] == "s3:ListBucket"
-    assert lst["Condition"]["StringLike"]["s3:prefix"] == "portolan-mirrors/sentinel-2-catalog/*"
+    assert lst["Condition"]["StringLike"]["s3:prefix"] == "tge-labs/s2-stac-geoparquet/*"
     objs = by_resource[OBJECTS_ARN]
     assert set(objs["Action"]) == {"s3:GetObject", "s3:PutObject",
                                    "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"}
@@ -488,5 +488,9 @@ def test_role_trust_statement_names_the_rails_user():
     assert stmt["Effect"] == "Allow" and stmt["Action"] == "sts:AssumeRole"
     assert stmt["Principal"] == {"AWS": "arn:aws:iam::939788573396:user/rails-sentinel-2-catalog"}
     readme = (RAILS / "README.md").read_text()
-    assert "arn:aws:iam::939788573396:role/source-coop-portolan-mirrors" in readme
+    # The role ARN is not written here. Source Cooperative provisions the
+    # role per organization, so the README names the repository variable
+    # that carries it and no document in the tree holds a guessed ARN.
+    assert "SOURCE_COOP_ROLE_ARN" in readme
+    assert "source-coop-portolan-mirrors" not in readme
     assert "[profile source-coop]" in readme and "rails-sentinel-2-catalog" in readme

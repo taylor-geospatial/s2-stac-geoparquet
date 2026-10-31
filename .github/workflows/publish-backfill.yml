@@ -221,7 +221,7 @@ jobs:
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}-${{ matrix.year }}
           aws-region: us-west-2
           role-duration-seconds: 21600
@@ -231,7 +231,7 @@ jobs:
         if: steps.chunks.outputs.present == 'true' && steps.assume-long.outcome == 'failure'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}-${{ matrix.year }}
           aws-region: us-west-2
 
@@ -258,8 +258,8 @@ jobs:
         id: build
         if: steps.chunks.outputs.present == 'true'
         env:
-          PUBLIC_BASE: https://data.source.coop/portolan-mirrors/sentinel-2-catalog
-          S2_UPLOAD_ROLE_ARN: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          PUBLIC_BASE: https://data.source.coop/tge-labs/s2-stac-geoparquet
+          S2_UPLOAD_ROLE_ARN: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           S2_UPLOAD_SESSION_NAME: ${{ github.event.repository.name }}-${{ github.run_id }}-${{ matrix.year }}-part
         run: |
           set -euo pipefail
@@ -296,7 +296,7 @@ jobs:
         if: steps.build.outputs.staged == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}-${{ matrix.year }}-final
           aws-region: us-west-2
       - name: Upload anything year ${{ matrix.year }} still has staged
@@ -345,7 +345,7 @@ jobs:
       - name: Assume the Source Cooperative write role
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}-finalize
           aws-region: us-west-2
 

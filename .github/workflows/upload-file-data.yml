@@ -58,7 +58,7 @@ jobs:
       - name: Assume the Source Cooperative write role
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}-file
           aws-region: us-west-2
       - name: Upload

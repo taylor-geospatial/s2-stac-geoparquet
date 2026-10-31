@@ -62,7 +62,7 @@ jobs:
       - name: Restamp collection metadata from the published parts
         run: |
           set -euo pipefail
-          STATS=https://data.source.coop/portolan-mirrors/sentinel-2-catalog
+          STATS=https://data.source.coop/tge-labs/s2-stac-geoparquet
           probe() {
             # 0 published, 3 not published, anything else could not answer.
             local code=0
@@ -122,7 +122,7 @@ jobs:
       - name: Assume the Source Cooperative write role
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}-catalog
           aws-region: us-west-2
 

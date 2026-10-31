@@ -31,7 +31,7 @@ def test_default_is_the_first_collection():
 def test_names_and_public_base():
     assert cols.NAMES == ("sentinel-2-l2a", "sentinel-2-c1-l2a")
     assert cols.get("sentinel-2-c1-l2a").public_base == (
-        "https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-c1-l2a")
+        "https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a")
 
 
 def test_c1_config():

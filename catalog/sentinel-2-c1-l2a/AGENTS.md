@@ -2,7 +2,7 @@
 
 Guidance for AI agents and automated clients querying this collection.
 
-**One rule survives every edit to this file.** Every claim here is either
+**One rule governs each edit to this file.** A claim here is either
 quoted from a source or measured from the data. If you cannot point at where a
 fact came from, it does not belong in this file. An agent acting on an invented
 column name or an invented join key produces a confident wrong answer, and
@@ -14,6 +14,17 @@ uniform record: query it first, and use
 [`sentinel-2-l2a`](../sentinel-2-l2a/AGENTS.md) when you need Earth
 Search's original index instead.
 
+| Resource | URL |
+|---|---|
+| This collection's metadata | `https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/collection.json` |
+| Catalog root and its agent guide | `https://data.source.coop/tge-labs/s2-stac-geoparquet/catalog.json`, [`../AGENTS.md`](../AGENTS.md) |
+| Statistics beside this index | [`stats-c1`](../stats-c1/AGENTS.md) |
+| Upstream STAC collection | https://earth-search.aws.element84.com/v1/collections/sentinel-2-c1-l2a |
+| Upstream STAC API | https://earth-search.aws.element84.com/v1 |
+| Visual browser | [Portolan browser](https://browser.portolan-sdi.org/#/external/data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/collection.json) |
+| Interactive explorer | https://research.taylorgeospatial.org/s2-stac-geoparquet/ |
+| Human-readable README | [`README.md`](README.md) |
+
 ## What this is
 
 One row per Sentinel-2 Collection 1 L2A scene in the AWS Earth Search item
@@ -24,8 +35,8 @@ AWS, and every COG URL is already in the `assets` column of the row that
 describes it.
 
 ```
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-c1-l2a/year=YYYY/items.parquet   every year, one file
-https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-c1-l2a/year=YYYY/live-MM.parquet  any year may have some, MM = 01..12
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/year=YYYY/items.parquet   every year, one file
+https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/year=YYYY/live-MM.parquet  any year may have some, MM = 01..12
 ```
 
 A year is one `items.parquet`. There is no zone split and no zone column:
@@ -58,7 +69,7 @@ SET TimeZone = 'UTC';
 SELECT year, count(*) AS scenes, min(datetime) AS first, max(datetime) AS last
 FROM (
   SELECT year, id, datetime
-  FROM read_parquet('s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-c1-l2a/year=*/*.parquet',
+  FROM read_parquet('s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/year=*/*.parquet',
                     hive_partitioning = true)
   WHERE year IN (2017, 2018)
   QUALIFY row_number() OVER (PARTITION BY id ORDER BY "s2:generation_time" DESC NULLS LAST) = 1
@@ -94,7 +105,7 @@ SET TimeZone = 'UTC';
 
 SELECT id, datetime, "eo:cloud_cover",
        json_extract_string(assets, '$.visual.href') AS visual_cog
-FROM read_parquet('https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-c1-l2a/year=2021/items.parquet')
+FROM read_parquet('https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a/year=2021/items.parquet')
 WHERE _tile = '31UFU'
   AND datetime BETWEEN '2021-08-01' AND '2021-10-31 23:59:59'
   AND "eo:cloud_cover" < 10
@@ -105,11 +116,11 @@ LIMIT 20;
 Column names with a colon are not identifiers. Quote them: `"eo:cloud_cover"`,
 not `eo:cloud_cover`. `_tile`, `_month` and `_hilbert` need no quotes.
 
-**Row groups.** Every file is sorted `(_tile, datetime)` — tile-major — in
-uniform row groups at a target of 6,000 rows (6,144 as DuckDB writes them).
-One tile's year is a single contiguous run in acquisition order, so any
-tile-and-window query admits the one or two groups that hold the run: one
-range request each, a few hundred KB, whatever the window. This is the
+**Row groups.** Each file is sorted `(_tile, datetime)`, which is tile-major,
+in uniform row groups at a target of 6,000 rows (6,144 as DuckDB writes them).
+One tile's year is one contiguous run in acquisition order, so a
+tile-and-window query admits the one or two groups covering that run, at one
+range request each and a few hundred KB, whatever the window. This is the
 layout the search-latency experiments behind issue #9 measured as fastest
 for tile-window searches; the month-major order of the older
 `sentinel-2-l2a` parts scatters a tile's year across its twelve month
@@ -142,7 +153,7 @@ say on its own.
 | `type` | string | Always 'Feature'. |
 | `stac_version` | string | STAC version of the source item. |
 | `stac_extensions` | list<string> | Extension schema URIs of the source item. |
-| `id` | string | Earth Search item id, e.g. S2B_T31UET_20260921T105030_L2A. |
+| `id` | string | Earth Search item id, such as S2B_T31UET_20260921T105030_L2A. |
 | `bbox` | list<double> | Item bounding box [w, s, e, n], CRS84. |
 | `links` | STRUCT(href VARCHAR, rel VARCHAR, title VARCHAR, "type" VARCHAR)[] | Source item links (canonical et al.); paging links are stripped. |
 | `collection` | string | Always 'sentinel-2-c1-l2a'. |
@@ -152,7 +163,7 @@ say on its own.
 | `platform` | string | sentinel-2a / sentinel-2b / sentinel-2c. |
 | `constellation` | string | Always 'sentinel-2'. |
 | `instruments` | list<string> | Always ['msi']. |
-| `grid:code` | string | MGRS grid code, e.g. MGRS-31UET. `_tile` is the bare id. |
+| `grid:code` | string | MGRS grid code, such as MGRS-31UET. `_tile` is the bare id. |
 | `mgrs:utm_zone` | int64 | UTM zone number, 1-60. |
 | `mgrs:latitude_band` | string | MGRS latitude band letter. |
 | `mgrs:grid_square` | string | MGRS 100 km grid square. |
@@ -174,11 +185,11 @@ say on its own.
 | `s2:thin_cirrus_percentage` | double | Scene classification percentage. |
 | `s2:snow_ice_percentage` | double | Scene classification percentage. |
 | `s2:product_type` | string | Always 'S2MSI2A'. |
-| `s2:processing_baseline` | string | e.g. 05.13. |
+| `s2:processing_baseline` | string | such as 05.13. |
 | `s2:product_uri` | string | ESA product name. |
 | `s2:generation_time` | string | Processing generation time; dedupe tiebreak. |
 | `s2:datatake_id` | string | ESA datatake id. |
-| `s2:datatake_type` | string | e.g. INS-NOBS. |
+| `s2:datatake_type` | string | such as INS-NOBS. |
 | `s2:datastrip_id` | string | ESA datastrip id. |
 | `s2:reflectance_conversion_factor` | double | Sun-distance reflectance factor. |
 | `view:azimuth` | double | Mean viewing azimuth angle, degrees. |
@@ -193,7 +204,7 @@ say on its own.
 | `assets` | string | The upstream STAC assets object, verbatim, as a compact JSON string. Parse with json_extract or JSON.parse. |
 | `_month` | int8 | month(datetime). Query helper, not STAC; not a sort key here (rows are ordered (_tile, datetime)). |
 | `_hilbert` | uint32 | ST_Hilbert(geometry, world bounds). Query helper, not STAC; not a sort key here. |
-| `_tile` | string | MGRS tile id from grid:code, e.g. 31UET. THE spatial join key and the first sort key; datetime is the second. |
+| `_tile` | string | MGRS tile id from grid:code, such as 31UET. The spatial join key and the first sort key; datetime is the second. |
 | `geometry` | geometry | Scene footprint, CRS84. |
 
 **Spatial.** `geometry` is the scene footprint in CRS84. `bbox` is the same
@@ -211,30 +222,31 @@ and `updated` are when Earth Search ingested and last touched the item;
 `created` is what the daily refresh looks back on, because reprocessed old
 scenes arrive with an old `datetime` and a new `created`.
 
-**Three added columns, and they are helpers, not STAC.** They exist so that
+**The added columns are query helpers rather than STAC.** They exist so that
 readers can prune and join:
 
 - `_tile` — the MGRS tile id, above. The first sort key; `datetime` (an
   upstream column) is the second, and together they are the whole order.
 - `_month` — `month(datetime)`, 1 to 12. A filter convenience only; not a
   sort key in this collection (it is the first sort key in
-  `sentinel-2-l2a`, which is why the column is kept with the same meaning).
+  `sentinel-2-l2a`, so the column is kept here with the same meaning).
 - `_hilbert` — `ST_Hilbert(geometry, world bounds)`. Kept for parity with
   `sentinel-2-l2a`; not a sort key here.
 
-Nothing upstream publishes these three columns. Do not pass them on as STAC
-properties, and do not treat `_hilbert` as meaningful on its own — it is a
-position on a space-filling curve, not a measurement.
+Earth Search publishes none of these three columns. Do not pass them on as
+STAC properties, and read `_hilbert` only as a position on a space-filling
+curve, which orders rows and measures nothing.
 
-**Two upstream objects are strings.** `processing:software` is the upstream
-name-to-version map as a compact JSON string (its keys change between
-baselines, which is why it is not a struct); `assets` is the JSON string
-described below. `proj:centroid` and `links` are the only nested columns.
+**Both nested upstream objects arrive as strings.** `processing:software` is
+the upstream name-to-version map as a compact JSON string, because its keys
+change between baselines and a struct would need one schema per baseline.
+`assets` is the JSON string described below. `proj:centroid` and `links` are the only nested columns.
 
-**Everything else** is the upstream STAC property under its upstream name,
-unchanged. Nothing is reconstructed or derived from another field.
+**Each remaining column** is the upstream STAC property under its upstream
+name, unchanged. This mirror reconstructs and derives no column from another
+field.
 
-## NULLs you will meet
+## Null columns
 
 `s2:dark_features_percentage` is NULL on every scene processed at baseline
 05.11 or later — ESA dropped the class from the scene classification, and
@@ -269,7 +281,7 @@ be higher next month.
 `assets` is a VARCHAR holding the upstream STAC assets object verbatim, as a
 compact JSON string. It is a string on purpose: deeply nested structs make a
 Parquet file hard for some readers to open, and a string keeps every reader's
-schema flat. The cost is that you parse it.
+schema flat. You parse it in exchange.
 
 ```sql
 json_extract_string(assets, '$.visual.href')   -- one href
@@ -292,7 +304,7 @@ Every href sits under one directory per scene:
 `https://e84-earth-search-sentinel-data.s3.us-west-2.amazonaws.com/sentinel-2-c1-l2a/<zone>/<band>/<sq>/<year>/<month>/<id>/`
 (zone, latitude band and grid square being the three parts of `_tile`, the
 month unpadded), with the band files named `B04.tif`, `TCI.tif`, `SCL.tif`,
-`CLD_20m.tif`, `SNW_20m.tif`, `L2A_PVI.jpg` and so on. That directory also
+`CLD_20m.tif`, `SNW_20m.tif` and `L2A_PVI.jpg`. That directory also
 holds `<id>.json`, the canonical STAC item (the row's `links` carry it as
 `rel:canonical`).
 
@@ -311,9 +323,9 @@ Do not build an asset URL from a template. Read the href.
 
 A scene can be fetched more than once: the daily refresh re-reads a lookback
 window on `created`, and a reprocessed product keeps its id. Rows are
-deduped by `id`, keeping the highest `s2:generation_time` (`NULLS LAST`),
-when each year file is built and again at each fold. So `id` is unique
-within a file. Between folds, a reprocessed scene can sit in a live part
+deduped by `id` when each year file is built and again at each fold. That
+dedupe retains the highest `s2:generation_time`, with `NULLS LAST`. So `id` is
+unique within a file. Between folds, a reprocessed scene can sit in a live part
 with a newer `s2:generation_time` than the copy in `items.parquet`, so
 dedupe on `id` keeping the highest `s2:generation_time` when you glob a
 year (the `QUALIFY` in the glob snippet above). Across the whole table,
@@ -345,12 +357,12 @@ The daily job runs only while the repository variable `C1_LIVE_ENABLED` is
 set. With it unset this collection changes only when a person commits and
 publishes it.
 
-## What this collection does not do
+## Scope of the mirror
 
-It does not filter, reclassify or interpolate anything Earth Search publishes.
-It adds `_month`, `_hilbert`, `_tile` and the flat `thumbnail_url`, and nothing
-else. There is no STAC API in front of it: query the Parquet directly, over
-HTTP range requests, with no key and no rate limit.
+This collection does not filter, reclassify or interpolate anything Earth
+Search publishes. It adds `_month`, `_hilbert`, `_tile` and the flat
+`thumbnail_url`, and no other column. No STAC API stands in front of it, so
+query the Parquet directly over HTTP range requests, without a key.
 
 Structural links resolve relative to the object that carries them. Objects here
 carry no `self` link, so a client tracks its own location.

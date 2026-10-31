@@ -49,7 +49,7 @@ import { canSampleUint16, cogTileLayer, previewImage, previewLayer, openScene, s
 import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSES, PRESETS,
   bandsOf, HIST_BINS } from "./bands.js";
 import { dayRange, valueRange } from "./rangeslider.js";
-import { sceneRows, warmPart, readTable, keyedRows } from "./search.js";
+import { sceneRows, warmPart, readTable, keyedRows, fmtSecs } from "./search.js";
 import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
 // deck.gl, luma.gl and @developmentseed/deck.gl-geotiff are bundled into this
 // module by Vite, so there is one copy of each. The raster layers build
@@ -57,10 +57,21 @@ import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "
 // instance runs, and a second copy of @luma.gl/core gives two class
 // identities and textures that do not bind. See vite.config.js.
 
+// The published catalog, through its two doors. The gateway serves a named
+// file over HTTP range requests, which is what this page reads. The bucket
+// is the same bytes, and DuckDB needs it: it expands a glob over s3:// and
+// refuses one over https:// ("Globs (*) for generic HTTP file are not
+// supported"). The copyable query in the "API request" box names the bucket
+// for that reason, and names it whatever ?base= says, so a reader always
+// gets a query against the published data.
+const PUBLIC_HTTPS = "https://data.source.coop/tge-labs/s2-stac-geoparquet";
+const PUBLIC_S3 = PUBLIC_HTTPS.replace(
+  "https://data.source.coop/", "s3://us-west-2.opendata.source.coop/");
+
 // ?base=http://localhost:8081 points the whole app at a local publish tree,
 // which is how it is developed before the bucket is populated.
 export const BASE = new URLSearchParams(location.search).get("base")
-  ?? "https://data.source.coop/portolan-mirrors/sentinel-2-catalog";
+  ?? PUBLIC_HTTPS;
 
 // The collections this page can show and what differs between them; the
 // rest — the stats products, the scene query, the COG reads — is the same
@@ -81,16 +92,19 @@ export const BASE = new URLSearchParams(location.search).get("base")
 // for a tile
 // (apiMirror): Collection 1 items have no s2:mgrs_tile, their tile is
 // grid:code "MGRS-31UET". `masks` are the extra single bands its scenes
-// carry (bands.js MASK_BANDS). `since` is the first year with scenes. It
-// sets the sub-header text. It also sets the year select's fallback range
-// when the stats are missing.
+// carry (bands.js MASK_BANDS). `firstDate` is the day of the collection's
+// oldest scene, read from the start of the temporal extent its
+// collection.json publishes. No window on this page reaches before it.
+// `since`, its year, is derived from it below: it sets the sub-header text,
+// and it sets the year select's fallback range when the stats are missing.
 // DEFAULT_COLLECTION is what loads without ?collection=. Collection 1 is
 // the default since 2026-09-22, when its backfill and stats were published;
 // ?collection=sentinel-2-l2a opens the first collection.
 export const DEFAULT_COLLECTION = "sentinel-2-c1-l2a";
 export const COLLECTIONS = {
   "sentinel-2-l2a": {
-    label: "Sentinel-2 L2A (Earth Search)", title: "Sentinel-2 L2A", since: 2016,
+    label: "Sentinel-2 L2A (Earth Search)", title: "Sentinel-2 L2A",
+    firstDate: "2016-11-01",
     dir: "sentinel-2-l2a", statsDir: "stats", tileColumn: "s2:mgrs_tile",
     // No part of this collection has ever had a sidecar: only Collection 1's
     // items.parquet gets one (tools/rails/fold_live.sbatch). Saying so saves
@@ -105,7 +119,7 @@ export const COLLECTIONS = {
   },
   "sentinel-2-c1-l2a": {
     label: "Sentinel-2 Collection 1 (Earth Search)", title: "Sentinel-2 Collection 1 L2A",
-    since: 2015,
+    firstDate: "2015-10-22",
     dir: "sentinel-2-c1-l2a", statsDir: "stats-c1", tileColumn: "_tile",
     // items.parquet publishes one; a live part does not, and pays the probe.
     sidecars: true,
@@ -117,6 +131,7 @@ export const COLLECTIONS = {
     masks: Object.keys(MASK_BANDS),
   },
 };
+for (const c of Object.values(COLLECTIONS)) c.since = Number(c.firstDate.slice(0, 4));
 const requestedCollection = new URLSearchParams(location.search).get("collection");
 export const COLLECTION_ID = COLLECTIONS[requestedCollection] ? requestedCollection : DEFAULT_COLLECTION;
 const COL = COLLECTIONS[COLLECTION_ID];
@@ -222,7 +237,8 @@ const WANT = {
     url.searchParams.set("collection", sel.value);
     location.assign(url);
   });
-  $("title").textContent = COL.title;
+  // #title is the application name and is set in index.html. COL.title
+  // names the collection, which the select and the tip below carry.
   $("sub").textContent = `Scenes since ${COL.since}, read from static files. No API.`;
   $("sub-info").dataset.tip = `${COL.title} scenes since ${COL.since}. Every query on this `
     + "page is an HTTP range read against static GeoParquet on Source Cooperative. Each "
@@ -353,6 +369,10 @@ let wireTip = () => {};
   const KEY = "s2-explorer.welcomed";
   const dlg = $("welcome");
   $("about").addEventListener("click", () => dlg.showModal());
+  // The ✕ in the dialog's corner. Escape and the "Start exploring" submit
+  // already close it; this is the third way, for a pointer that never
+  // reaches the keyboard or the foot of the box.
+  $("welcome-x").addEventListener("click", () => dlg.close());
   dlg.addEventListener("close", () => {
     try { localStorage.setItem(KEY, "1"); } catch { /* no storage: ask again next time */ }
   });
@@ -706,7 +726,7 @@ function hashOfState() {
   const c = map.getCenter();
   put("map", `${map.getZoom().toFixed(2)}/${c.lat.toFixed(4)}/${c.lng.toFixed(4)}`);
   if (S.year !== null) put("year", S.year);
-  if (S.from && S.to && !(S.from === `${S.year}-01-01` && S.to === `${S.year}-12-31`)) {
+  if (S.from && S.to && !(S.from === yearStart(S.year) && S.to === yearEnd(S.year))) {
     put("d", `${S.from}..${S.to}`);
   }
   if (S.maxCloud !== 100) put("cloud", S.maxCloud);
@@ -1255,6 +1275,30 @@ function lastDayOfMonth(ym) {
   return new Date(Date.UTC(yy, mm, 0)).toISOString().slice(0, 10);
 }
 
+// A day, held to the days a scene can fall on. The collection's first scene
+// bounds the oldest year and today bounds the newest: before COL.firstDate
+// and after TODAY there is nothing to find, so no handle and no calendar
+// may travel there. ISO day strings compare as dates, so two comparisons
+// are the whole clamp.
+const clampDay = (day) => (day < COL.firstDate ? COL.firstDate
+  : day > TODAY ? TODAY : day);
+// A whole window, clamped. Every caller passes a span it has already built —
+// a year, a locked month, one month wider — and takes back the part of it
+// that can hold scenes. buildDateSlider puts the pair on the slider, and
+// dayRange writes it onto the From/To calendars as their min and max, so
+// the calendars refuse the same days the handles cannot reach.
+// A span wholly outside those days clamps to one end of them, and both ends
+// land on the same day rather than crossing: the slider keeps a start before
+// its end whatever it is handed.
+function clampWindow(from0, to0) {
+  const from = clampDay(from0), to = clampDay(to0);
+  return from > to ? [from, from] : [from, to];
+}
+// The searchable span of one year: 2016 opens on November, and the current
+// year ends today, not on December 31.
+const yearStart = (year) => clampDay(`${year}-01-01`);
+const yearEnd = (year) => clampWindow(`${year}-01-01`, `${year}-12-31`)[1];
+
 // Create the two-handle day slider or move its bounds. onChange fires on
 // every handle drag step and calendar edit, and drives the map paint and
 // the card filter through one apply.
@@ -1292,7 +1336,7 @@ function setYear(year) {
   S.monthLock = null;
   $("datelock").hidden = true;
   $("year").value = String(year);
-  setWindow(`${year}-01-01`, `${year}-12-31`);
+  setWindow(yearStart(year), yearEnd(year));
   if (S.tile && S.search) startSearch(S.tile, year);
 }
 
@@ -1302,13 +1346,13 @@ function lockToMonth(ym) {
   S.monthLock = ym;
   $("datelock").hidden = false;
   $("datelock-label").textContent = ym;
-  setWindow(`${ym}-01`, lastDayOfMonth(ym));
+  setWindow(...clampWindow(`${ym}-01`, lastDayOfMonth(ym)));
   if (S.tile) startSearch(S.tile, Number(ym.slice(0, 4)));
 }
 function unlockMonth() {
   S.monthLock = null;
   $("datelock").hidden = true;
-  setWindow(`${S.year}-01-01`, `${S.year}-12-31`);
+  setWindow(yearStart(S.year), yearEnd(S.year));
 }
 $("datereset").addEventListener("click", unlockMonth);
 
@@ -1324,20 +1368,24 @@ function monthYearLabel(isoDay) {
 }
 
 // The window one month wider than S.from/S.to, or null when it already
-// spans the whole year. The start gives way first, one month at a time,
-// down to the year's first day; only once it is pinned there does the end
-// start moving. Both ends stay inside S.year — lastDayOfMonth resolves a
-// "YYYY-MM" string to that month's own last day.
+// spans the year's whole searchable part. The start gives way first, one
+// month at a time, down to the year's first searchable day; only once it is
+// pinned there does the end start moving. Both ends stay inside S.year —
+// lastDayOfMonth resolves a "YYYY-MM" string to that month's own last day,
+// and yearStart/yearEnd hold the pair to the days that can carry scenes, so
+// the button stops offering a month once the window has reached them.
 function widerWindow() {
-  const first = `${S.year}-01-01`, last = `${S.year}-12-31`;
+  const first = yearStart(S.year), last = yearEnd(S.year);
   if (S.from > first) {
     const m = Number(S.from.slice(5, 7));
-    const from = m === 1 ? first : `${S.year}-${String(m - 1).padStart(2, "0")}-01`;
+    const from = m === 1 ? first
+      : clampDay(`${S.year}-${String(m - 1).padStart(2, "0")}-01`);
     return { from, to: S.to };
   }
   if (S.to < last) {
     const m = Number(S.to.slice(5, 7));
-    const to = m === 12 ? last : lastDayOfMonth(`${S.year}-${String(m + 1).padStart(2, "0")}`);
+    const to = m === 12 ? last
+      : clampDay(lastDayOfMonth(`${S.year}-${String(m + 1).padStart(2, "0")}`));
     return { from: S.from, to };
   }
   return null;
@@ -1427,7 +1475,7 @@ function restoreControls(defaultYear) {
   S.year = year;
   $("year").value = String(year);
   if (WANT.metric) { $("metric").value = WANT.metric; updateLegend(); }
-  if (WANT.sort) { S.sort = WANT.sort; $("sort").value = WANT.sort; }
+  if (WANT.sort) { S.sort = WANT.sort; $("sort").value = WANT.sort; sortTip?.(); }
   // The scene-count slider's bound follows the window (updateScenesBound),
   // and it starts at 1: raise it far enough to hold the asked value, or the
   // input would clamp it away here. The first paint then re-bounds the slider
@@ -1447,7 +1495,7 @@ function restoreControls(defaultYear) {
   $("maxcloud-out").textContent = $("maxcloud").value;
   $("mincoverage-out").textContent = $("mincoverage").value;
   $("minscenes-out").textContent = $("minscenes").value;
-  buildDateSlider(`${year}-01-01`, `${year}-12-31`);
+  buildDateSlider(yearStart(year), yearEnd(year));
   // A window inside the restored year only. set() clamps to the slider's
   // bounds and writes the clamped days back, and its onChange is what puts
   // them in S; the two reads below just say so out loud.
@@ -1510,14 +1558,27 @@ async function init() {
   $("minscenes").addEventListener("input", onSlider);
   // Populate and wire the result sort control. Reset the shown card count on
   // every sort change to restart pagination at card 1.
-  for (const [key, s] of Object.entries(SORTS)) $("sort").append(new Option(s.label, key));
+  for (const [key, s] of Object.entries(SORTS)) {
+    const o = new Option(s.label, key);
+    o.title = s.tip;
+    $("sort").append(o);
+  }
   $("sort").value = S.sort;
+  // The select wears the tip of whatever is chosen, because an option's own
+  // title only shows while the list is open. It reads the control rather
+  // than S.sort: restoreControls sets both, and this runs on either path.
+  sortTip = () => { $("sort").title = SORTS[$("sort").value]?.tip ?? ""; };
+  sortTip();
   function setSort(key) {
     S.sort = key;
     S.shown = 15;
+    sortTip();
     scheduleApply({ cards: true, nav: true });
   }
   $("sort").addEventListener("change", () => setSort($("sort").value));
+  // The toggle only changes how much of the query is shown, so it repaints
+  // the pane from the arguments already held rather than running anything.
+  $("duck-prep").addEventListener("change", () => paintDuck());
   say("Reading the stats timeline…");
   let span, found;
   try {
@@ -1637,7 +1698,8 @@ const YEAR_CACHE_MAX = 8;
 const yearCache = new Map();
 function yearRows(tile, year) {
   const key = `${COLLECTION_ID}|${tile}|${year}`;
-  if (!yearCache.has(key)) {
+  const cached = yearCache.has(key);
+  if (!cached) {
     const p = (async () => {
       // The whole year is the window, so it names every month's live part of
       // that year alongside the year's archive part.
@@ -1651,7 +1713,30 @@ function yearRows(tile, year) {
     yearCache.set(key, p);
     if (yearCache.size > YEAR_CACHE_MAX) yearCache.delete(yearCache.keys().next().value);
   }
-  return yearCache.get(key);
+  return yearCache.get(key).then((got) => ({ ...got, cached }));
+}
+
+// How long every search this session took to answer, in milliseconds. A
+// search served from yearCache counts too: it answered, and the time it
+// took is the point of holding the year in memory.
+const readMs = [];
+function timingLine(search) {
+  if (!search) return { text: "", tip: "" };
+  const avg = readMs.length
+    ? readMs.reduce((a, b) => a + b, 0) / readMs.length : null;
+  const now = fmtSecs(search.ms ?? 0);
+  const n = readMs.length;
+  const text = avg === null ? ` in ${now}`
+    : ` in ${now} (avg ${fmtSecs(avg)})`;
+  // The read count belongs in the tooltip. On the line it pushes the sort
+  // control onto a second row in a 360px panel.
+  const head = search.cached
+    ? `This tile-year was already in memory and answered in ${now}. `
+    : `This search range-read the year's parts in ${now}. `;
+  const tail = n
+    ? `Session average ${fmtSecs(avg)} over ${n} search${n === 1 ? "" : "es"}.`
+    : "No search has finished yet.";
+  return { text, tip: head + tail };
 }
 
 // The filtered, sorted view of the active search, memoised on every input.
@@ -1668,14 +1753,31 @@ function currentView() {
   return viewRows;
 }
 
+// True from the first line of a search until its rows land or it gives up.
+// The count line is the one place a reader watches for the answer, so the
+// wait is reported there and not only in the results box.
+let searching = false;
+function paintCountWait() {
+  const box = $("rescount");
+  if (!searching) { box.textContent = ""; box.title = ""; return; }
+  box.replaceChildren(el("span", "spin"), el("span", "restime", "Searching…"));
+  box.title = "The page range-reads the year's item parts.";
+}
+
 function updateFilterStatus() {
-  if (!S.search) { $("rescount").textContent = ""; say(`${filterLine()}.`); return; }
+  if (!S.search) { paintCountWait(); say(`${filterLine()}.`); return; }
   // The mirror shows the request the page did not make, so it tracks the
   // filters the user sees, not the ones the last read ran under. A slider
   // drag rewrites it with the rest of the apply.
   $("api").textContent = apiMirror(S.search.tile, S.from, S.to, S.maxCloud, S.minCoverage);
+  paintDuck([S.search.tile, S.search.year, S.from, S.to,
+    S.maxCloud, S.minCoverage, S.sort]);
   const view = currentView();
-  $("rescount").textContent = `${view.length} of ${S.search.rows.length} scenes`;
+  const timing = timingLine(S.search);
+  $("rescount").replaceChildren(
+    el("span", "resn", `${view.length} of ${S.search.rows.length} scenes`),
+    el("span", "restime", timing.text));
+  $("rescount").title = timing.tip;
   say(`${view.length} of ${S.search.rows.length} ${S.search.tile} scenes in `
     + `${S.search.year} pass (${S.from} → ${S.to}, cloud ≤ ${S.maxCloud}, `
     + `coverage ≥ ${S.minCoverage}) — one year of parts range-read once, `
@@ -1978,6 +2080,91 @@ function apiMirror(tile, d0, d1, cc, cov) {
       limit: 30,
     },
   }, null, 2);
+}
+
+// The same answer as a query a reader can paste into DuckDB. The page does
+// not run it. It is here so the result list above can be reproduced, and
+// checked, without this page.
+//
+// Every gate is the SQL twin of one in results.js, so the two return the
+// same rows:
+//   * the date window is inclusive at both ends (filterRows t0/t1),
+//   * the coverage floor is a no-op at 0, and a NULL coverage always
+//     passes, because the floor never excludes what it cannot judge,
+//   * the sort carries the same tiebreak on id.
+// The source is the collection's own partition:glob with
+// hive_partitioning on, so `year` is a column read from the directory name
+// and the predicate on it prunes whole years before a byte is read. Naming
+// year=YYYY/ in the path instead opens the same files (measured at 1.28 s
+// against 1.32 s for one tile-year), and costs the reader the column: with
+// `year` in the WHERE, widening the search is one edit, `year BETWEEN
+// 2024 AND 2026`. A year's glob covers its archive part and its live
+// parts together, which is the set a search reads.
+function duckdbQuery(tile, year, d0, d1, cc, cov, sort, prep) {
+  const q = (c) => (/^[a-z_][a-z0-9_]*$/.test(c) ? c : `"${c}"`);
+  const tileCol = q(COL.tileColumn);
+  const cloud = '"eo:cloud_cover"';
+  const nodata = '"s2:nodata_pixel_percentage"';
+
+  const where = [
+    // First, because it is the partition predicate: it decides which files
+    // are opened, and it is the one a reader widens.
+    `year = ${year}`,
+    `${tileCol} = '${tile}'`,
+    `datetime BETWEEN '${d0}T00:00:00Z' AND '${d1}T23:59:59.999Z'`,
+    `${cloud} <= ${cc}`,
+  ];
+  if (cov > 0) where.push(`(${nodata} IS NULL OR 100 - ${nodata} >= ${cov})`);
+
+  const order = {
+    cloud: `${cloud}, id`,
+    coverage: `coverage DESC NULLS LAST, ${cloud}, id`,
+    date: "datetime DESC, id",
+  }[sort] ?? `${cloud}, id`;
+
+  // What the default keeps, each measured rather than assumed:
+  //   s3_url_style  the bucket name carries dots, so the default
+  //                 virtual-host URL fails its TLS check and nothing reads.
+  //   s3_region     without it DuckDB globs from the wrong region, prints a
+  //                 warning and retries, which costs a round-trip.
+  //   TimeZone      without it the timestamps print in the reader's zone and
+  //                 stop matching the dates on the cards.
+  // INSTALL and LOAD are what the toggle adds. DuckDB 1.5 autoloads httpfs
+  // on the first s3:// read, so they matter only to an older build.
+  const head = prep
+    ? ["-- DuckDB 1.5.0 or newer. INSTALL and LOAD are implicit from 1.5.",
+       "INSTALL httpfs; LOAD httpfs;",
+       "SET s3_region = 'us-west-2';  -- or DuckDB retries from the wrong one",
+       "SET s3_url_style = 'path';    -- required: the bucket name has dots",
+       "SET TimeZone = 'UTC';         -- print the instants the filter uses",
+       ""]
+    : ["SET s3_region = 'us-west-2';",
+       "SET s3_url_style = 'path';",
+       "SET TimeZone = 'UTC';",
+       ""];
+
+  return [
+    ...head,
+    `SELECT id, datetime, ${cloud} AS cloud, 100 - ${nodata} AS coverage`,
+    `FROM read_parquet('${PUBLIC_S3}/${COL.dir}/year=*/*.parquet',`,
+    "                  hive_partitioning = true)",
+    `WHERE ${where.join("\n  AND ")}`,
+    `ORDER BY ${order};`,
+  ].join("\n");
+}
+
+// Set once the sort control exists. restoreControls runs before that on
+// some paths, so the call there is guarded.
+let sortTip = null;
+
+// The pane and its setup toggle. The arguments are kept so flipping the
+// toggle repaints without a fresh search.
+let duckArgs = null;
+function paintDuck(args) {
+  if (args !== undefined) duckArgs = args;
+  $("duck").textContent = duckArgs
+    ? duckdbQuery(...duckArgs, $("duck-prep").checked)
+    : "";
 }
 
 const bboxOf = (r) => {
@@ -2314,6 +2501,30 @@ function drawHist(canvas, stats, lo, hi, min, max) {
 let shown = null;
 Object.defineProperties(window.S2, { shown: { get: () => shown }, ui: { value: ui } });
 
+// The scenes a step away from the one on the map. Stepping back and forth
+// over two dates is how a reader compares them, and every step used to re-read
+// the COG headers, the thumbnail and every overview. A scene holds all three
+// (cog.js), so holding the scene holds them, and a step back skips the reads.
+//
+// Eight scenes, so a reader can walk a week of dates forward and still step
+// back over all of them. The count is cheap: a scene's COGs, overviews and
+// thumbnail are small.
+//
+// The tiles are not held. The old CPU reader kept a warped tile per scene in
+// a Map, and a tile budget bounded those Maps across the warm scenes. This
+// reader gives the tiles to COGLayer, which frees its textures when the layer
+// leaves the map. A step back therefore reads the tiles again. Issue: port
+// the tile persistence to the new reader.
+const WARM_SCENES = 8;
+const warmed = new Map();
+const warmScene = (id) => warmed.get(id);
+function keepWarm(me) {
+  // Re-insert so the Map's order is least-recent first.
+  warmed.delete(me.id);
+  warmed.set(me.id, { scene: me.scene, bitmapP: me.bitmapP });
+  if (warmed.size > WARM_SCENES) warmed.delete(warmed.keys().next().value);
+}
+
 // The preview comes off once the tile layer has every tile of the resting
 // viewport. onViewportLoad fires mid-flight too (each coarse view the camera
 // passes through loads), so while the map moves this waits for its moveend.
@@ -2350,12 +2561,11 @@ function flyToImage(bbox) {
   map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 800 });
 }
 
-// The shown image's bbox against the viewport, as two fractions of the part
-// they share: `seen` is how much of the image the viewport holds, and `fills`
-// is how much of the viewport the image covers. Both are 1 with nothing
-// shown, which is the reading that leaves the button alone.
-function imageCover() {
-  const b = shown ? bboxOf(shown.r) : null;
+// A bbox against the viewport, as two fractions of the part they share:
+// `seen` is how much of the image the viewport holds, and `fills` is how
+// much of the viewport the image covers. Both are 1 with no bbox, which is
+// the reading that leaves the Zoom to button alone.
+function bboxCover(b) {
   if (!b) return { seen: 1, fills: 1 };
   const mb = map.getBounds();
   const w = Math.max(0, Math.min(b[2], mb.getEast()) - Math.max(b[0], mb.getWest()));
@@ -2365,6 +2575,15 @@ function imageCover() {
   const view = (mb.getEast() - mb.getWest()) * (mb.getNorth() - mb.getSouth());
   return { seen: image > 0 ? over / image : 1, fills: view > 0 ? over / view : 1 };
 }
+const imageCover = () => bboxCover(shown ? bboxOf(shown.r) : null);
+// Is a scene off screen, rather than merely bigger or smaller than the
+// viewport? A camera deep inside a footprint reads seen ~ 0 and fills 1, and
+// a camera zoomed far out of one reads seen 1 and fills ~ 0. Only a camera
+// somewhere else entirely reads both at 0.
+const offScreen = (r) => {
+  const { seen, fills } = bboxCover(bboxOf(r));
+  return seen < 0.02 && fills < 0.02;
+};
 let zoomtoOn = false;
 function syncZoomTo() {
   if (!shown) { zoomtoOn = false; $("zoomto").disabled = true; return; }
@@ -2928,13 +3147,19 @@ async function showBandsLoaded(me, spec, serial, failed) {
   spec = me.spec = bandSpec(me);
   syncPanel(spec, me);
   buildChannels(me, spec);
-  const preview = bandPreviewImage(me.scene, spec);
   cogLayer = bandTileLayer(me.scene, spec, styleKeyOf(spec), `cog-${id}-${me.bandsKey}`, me.eventsFor(me.bandsKey));
-  cogPreview = preview ? previewLayer(preview, me.scene, `cog-preview-${id}`) : null;
   // The real bands are on the map now; the flat scrub thumbnail that
   // bridged the release has done its job.
   scrubLayer = null;
   render();
+  // The same frame wait as showTci. A scene stepped back to holds its warped
+  // planes, so the tiles can be ready before this line and the preview would
+  // flash a blur over them.
+  await new Promise(requestAnimationFrame);
+  if (stale(me, serial)) return;
+  const preview = me.settled ? null : bandPreviewImage(me.scene, spec);
+  cogPreview = preview ? previewLayer(preview, me.scene, `cog-preview-${id}`) : null;
+  if (cogPreview) render();
   cogbar(id, "loading", preview ? "Preview shown — loading full resolution…" : "Loading full resolution…");
   debug(`[cog] ${id} ${me.bandsKey} preview shown at ${(performance.now() - me.t0).toFixed(0)} ms`);
   if (me.missing.length) {
@@ -2983,6 +3208,12 @@ async function showTci(me, spec, serial) {
   cogbar(id, "loading", "Loading preview…");
   say(`Preview of ${id} (True color) — loading full-resolution tiles…`);
   me.bitmapP ??= thumbnailBitmap(r.thumbnail_url);
+  // A warm scene holds its opened COGs, its overviews and its thumbnail, so a
+  // step back skips those reads. It does not hold tiles: COGLayer owns its
+  // textures and frees them when the layer leaves the map. The preview
+  // therefore always shows, and a step back reads the tiles again. See the
+  // warm pool above.
+  const warmTiles = false;
   const cog = await sceneCog(me.scene, "TCI");
   if (stale(me, serial)) return;
   cogLayer = cogTileLayer(cog, `cog-${id}-TCI`, me.eventsFor("TCI"));
@@ -2993,11 +3224,17 @@ async function showTci(me, spec, serial) {
   cogbar(id, "loading", "Loading full resolution…");
   const bitmap = await me.bitmapP;
   if (stale(me, serial)) return;
+  // Warm tiles resolve in a microtask, and so does a warm thumbnail, so the
+  // preview would win the race and flash a blur over tiles that are already
+  // there. Give deck.gl a frame to report the layer loaded, then read
+  // me.settled below. A cold scene pays one frame of the seconds it waits.
+  await new Promise(requestAnimationFrame);
+  if (stale(me, serial)) return;
   // Only thumbnail.jpg paints nodata white; preview.jpg and the .jp2 of
   // some 2018 rows (which Chrome and Firefox cannot decode, Safari can)
   // paint it black (cog.js, jpegNodataMask). The file name says which.
   const white = /\/thumbnail\.jpg$/i.test(new URL(r.thumbnail_url).pathname);
-  const preview = bitmap && previewImage(cog, bitmap, { white });
+  const preview = !warmTiles && bitmap && previewImage(cog, bitmap, { white });
   // Under the tiles unless they have all settled already; a failed tile
   // keeps it, as the bar says.
   if (preview && !me.settled) {
@@ -3023,10 +3260,11 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   const id = String(r.id);
   // A chip on the scene already shown keeps what it has read and set.
   const prev = shown?.id === id ? shown : null;
+  const warm = prev ?? warmScene(id);
   const me = shown = { id, r, t0: performance.now(), serial: 0, bandsKey: null, spec: null,
     settled: false, failed: false, tilesLoaded: false, missing: [],
     ranges: prev?.ranges ?? new Map(),
-    offset: offsetOf(r), scene: prev?.scene ?? null, bitmapP: prev?.bitmapP ?? null,
+    offset: offsetOf(r), scene: warm?.scene ?? null, bitmapP: warm?.bitmapP ?? null,
     loading: false, eventsFor: null };
   const bbox = bboxOf(r);
   if (fly && bbox) map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 1200 });
@@ -3060,6 +3298,7 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   });
   try {
     me.scene ??= openScene(id, sceneDirOf(r));
+    keepWarm(me);
     ui.preset = preset;
     if (band) ui.single = band;
     $("bandbox").hidden = false;
@@ -3225,14 +3464,19 @@ const CARD_PRESETS = [
 // Show a card's scene, through the nav state so every indicator follows it:
 // showOnMap alone leaves S.displayedId on the previously shown scene, and
 // the .current outline, the scrub thumb, the ‹/› steps and the hash's
-// scene= all keep pointing there. A card click is an explicit "frame this
-// scene", so it flies. The fallback covers a row that fell out of the view
-// between the render that built this card and the click on it.
+// scene= all keep pointing there. A card is the scrub's move in another
+// control, so it holds the camera: a reader who zoomed into one corner of a
+// tile clicks down the stack to compare that corner on each date, and a fly
+// would throw the comparison away every time. Only a scene the camera is
+// nowhere near gets framed, because nothing would otherwise appear. The
+// fallback covers a row that fell out of the view between the render that
+// built this card and the click on it.
 function showCard(r, preset) {
   if (preset) ui.preset = preset;
+  const fly = offScreen(r);
   const at = indexOfId(currentView(), r.id);
-  if (at >= 0) showIndex(at, true);
-  else showOnMap(r, null, ui.preset);
+  if (at >= 0) showIndex(at, fly);
+  else showOnMap(r, null, ui.preset, null, fly);
 }
 
 function buildCard(r) {
@@ -3305,6 +3549,13 @@ let searchSeq = 0;
 async function startSearch(tile, year, { flyFirst = true } = {}) {
   const seq = ++searchSeq;
   const box = $("results");
+  const panel = $("panel");
+  // Only the first search of a session lands the reader on Find scenes.
+  // After that the panel keeps the scroll it had: a click on another tile
+  // replaces the answer, and it should not also throw away the place the
+  // reader was in. Read both before S.search goes.
+  const resumed = Boolean(S.search);
+  const keepAt = panel.scrollTop;
   // The old search dies with the click that replaces it. It must not outlive
   // this line: an apply between here and the new rows would otherwise render
   // the previous tile-year's cards over the hint below, and a search that
@@ -3316,25 +3567,48 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   // run never reaches the success path below to start a fresh one (a query
   // error or an empty year both return early with no rows to warm).
   prefetchSeq++;
-  box.replaceChildren(el("p", "hint", "Reading the item parts…"));
+  searching = true;
+  paintCountWait();
+  if (resumed) {
+    // Hold the previous tile's cards while the read runs, dimmed and inert.
+    // The one-line hint below collapses #results, which shrinks the panel's
+    // scroll range under the reader, and the browser then clamps the scroll
+    // to the top. On a slow connection the panel sits up there for the whole
+    // read and drops back when the rows land. Nothing resizes this way, so
+    // nothing moves. The count line's spinner carries the wait.
+    // renderResultsNow returns on a null search, so these cards stay until
+    // this run replaces them.
+    box.classList.add("busy");
+  } else {
+    box.replaceChildren(el("p", "hint", "Reading the item parts…"));
+  }
   $("sql").textContent = "Range-reading…";
   // The mirror while the read runs. updateFilterStatus keeps it current from
   // the first rows on, but it cannot write it yet: S.search is null here.
   $("api").textContent = apiMirror(tile, S.from, S.to, S.maxCloud, S.minCoverage);
+  paintDuck([tile, year, S.from, S.to, S.maxCloud, S.minCoverage, S.sort]);
   say(`Range-reading tile ${tile}'s ${year} scenes…`);
   let got;
+  const askedAt = performance.now();
   try {
     got = await yearRows(tile, year);
   } catch (err) {
     if (seq !== searchSeq) return;
+    searching = false;
+    paintCountWait();
+    box.classList.remove("busy");
     box.replaceChildren(el("p", "hint", `Query failed — ${err.message}`));
     say(`Could not read the item parts — ${err.message}`, true);
     return;
   }
   if (seq !== searchSeq) return;
   if (!got.urls.length) {
+    searching = false;
+    paintCountWait();
+    box.classList.remove("busy");
     $("sql").textContent = "";
     $("api").textContent = "";
+    paintDuck(null);
     box.replaceChildren(el("p", "hint",
       `No published ${COLLECTION_ID} parts cover ${year}. Pick a year the backfill has reached.`));
     say(`Nothing published for ${year} in ${COLLECTION_ID} yet.`);
@@ -3346,16 +3620,34 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   scrubReady.clear();
   scrubReadyHd.clear();
   paintScrubTrack();
-  S.search = { tile, year, rows: got.rows, at: Date.now() };
+  // A fresh search reports the hyparquet read, which is the number the plan
+  // prints. A cache hit reports what the await actually cost.
+  const answeredIn = got.cached ? performance.now() - askedAt : got.ms;
+  readMs.push(answeredIn);
+  searching = false;
+  S.search = { tile, year, rows: got.rows, at: Date.now(),
+    ms: answeredIn, cached: got.cached };
   S.shown = 15;
   S.displayedId = null;
   S.detachedAt = 0;
+  box.classList.remove("busy");
   renderResultsNow();
   scheduleApply({ nav: true });
   const view = currentView();
-  if (view.length) {
-    showIndex(0, flyFirst);
-    if (snap !== "peek") box.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  if (view.length) showIndex(0, flyFirst, !resumed);
+  if (resumed) {
+    // The card list went out and came back a different length, which can
+    // clamp the scroll. Put it back where the reader left it. showIndex
+    // did not scroll, so nothing competes with this.
+    panel.scrollTop = keepAt;
+  } else if (view.length && snap !== "peek") {
+    // Land on the top of Find scenes, not on the top of the results. The
+    // first thing a user does with a tile's scenes is narrow them, so the
+    // dates and the three sliders have to be on screen with the list under
+    // them. showIndex has just scrolled its own card into view; this runs
+    // after it, so it is the scroll that settles. Not in peek, where the
+    // sheet is collapsed and there is nothing to scroll.
+    $("query").scrollIntoView({ block: "start", behavior: "smooth" });
   }
   // Fire-and-forget: warms the scrub stack outward from the shown scene.
   // Its own seq guard makes this safe to leave unawaited.
@@ -3370,7 +3662,9 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
 // except in peek, where the sheet is collapsed and there is nothing to see.
 // `fly` only frames the camera for the first result after a search; a step
 // or a scrub commit leaves the camera where the user left it (feedback 4).
-function showIndex(i, fly = false) {
+// `scroll` is false for the auto-show of a search that replaces an earlier
+// one, where startSearch restores the reader's own scroll instead.
+function showIndex(i, fly = false, scroll = true) {
   const view = currentView();
   const row = view[i];
   if (!row) return;
@@ -3380,7 +3674,7 @@ function showIndex(i, fly = false) {
   showOnMap(row, null, ui.preset, null, fly);
   renderResultsNow();
   scheduleApply({ nav: true });
-  if (snap !== "peek") {
+  if (scroll && snap !== "peek") {
     cardNodes.get(row.id)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
   // No neighbour-only prefetch here: prefetchScrubStack already covers the

@@ -52,7 +52,7 @@ C1_STATIC_ITEM_URL = ("https://e84-earth-search-sentinel-data.s3.us-west-2.amazo
 
 def test_static_item_normalizes_to_canonical_schema():
     req = urllib.request.Request(STATIC_ITEM_URL,
-                                 headers={"User-Agent": "sentinel-2-catalog-tools/1.0"})
+                                 headers={"User-Agent": "s2-stac-geoparquet-tools/1.0"})
     item = json.load(urllib.request.urlopen(req, timeout=60))
     row = normalize(item)
     want = {c[0] for c in DATA_COLUMNS if c[0] != "geometry"} | {"_geometry_json"}
@@ -559,7 +559,7 @@ def test_c1_static_item_normalizes_to_the_c1_schema():
     API feature does -- the repair path writes rows through
     config.schema.normalize, so this is the shape it must accept."""
     req = urllib.request.Request(C1_STATIC_ITEM_URL,
-                                 headers={"User-Agent": "sentinel-2-catalog-tools/1.0"})
+                                 headers={"User-Agent": "s2-stac-geoparquet-tools/1.0"})
     item = json.load(urllib.request.urlopen(req, timeout=60))
     row = C1.schema.normalize(item)
     want = {c[0] for c in s2c1_schema.DATA_COLUMNS if c[0] != "geometry"} | {"_geometry_json"}

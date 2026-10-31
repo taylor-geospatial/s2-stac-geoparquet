@@ -25,8 +25,8 @@ import sys
 import time
 from pathlib import Path
 
-BASE = "https://data.source.coop/portolan-mirrors/sentinel-2-catalog"
-S3 = "s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog"
+BASE = "https://data.source.coop/tge-labs/s2-stac-geoparquet"
+S3 = "s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet"
 PREFIX = "_experiments/layout"
 ZSTD_LEVEL = 18
 ROW_GROUP = 2000

@@ -65,7 +65,7 @@ def test_oidc_token_asks_the_runner_endpoint_for_the_sts_audience():
     assert tok == "jwt-for-/token?api-version=2.0&audience=sts.amazonaws.com"
     path, auth, ua = ep.seen[0]
     assert auth == "bearer runner-bearer"
-    assert ua.startswith("sentinel-2-catalog-tools/")
+    assert ua.startswith("s2-stac-geoparquet-tools/")
 
 
 def test_fresh_credentials_exchange_the_token_for_one_hour():

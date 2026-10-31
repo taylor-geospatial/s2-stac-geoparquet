@@ -15,7 +15,7 @@ import s2_schema
 import s2c1_schema
 
 DEFAULT = "sentinel-2-l2a"
-PUBLIC = "https://data.source.coop/portolan-mirrors/sentinel-2-catalog"
+PUBLIC = "https://data.source.coop/tge-labs/s2-stac-geoparquet"
 
 
 @dataclass(frozen=True)

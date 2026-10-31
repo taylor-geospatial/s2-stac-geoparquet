@@ -46,7 +46,7 @@ COLUMNS = [
     ("type", "VARCHAR", "Always 'Feature'."),
     ("stac_version", "VARCHAR", "STAC version of the source item."),
     ("stac_extensions", "VARCHAR[]", "Extension schema URIs of the source item."),
-    ("id", "VARCHAR", "Earth Search item id, e.g. S2B_T31UET_20260921T105030_L2A."),
+    ("id", "VARCHAR", "Earth Search item id, such as S2B_T31UET_20260921T105030_L2A."),
     ("bbox", "DOUBLE[]", "Item bounding box [w, s, e, n], CRS84."),
     ("links", _LINKS, "Source item links (canonical et al.); paging links are stripped."),
     ("collection", "VARCHAR", "Always 'sentinel-2-c1-l2a'."),
@@ -56,7 +56,7 @@ COLUMNS = [
     ("platform", "VARCHAR", "sentinel-2a / sentinel-2b / sentinel-2c."),
     ("constellation", "VARCHAR", "Always 'sentinel-2'."),
     ("instruments", "VARCHAR[]", "Always ['msi']."),
-    ("grid:code", "VARCHAR", "MGRS grid code, e.g. MGRS-31UET. `_tile` is the bare id."),
+    ("grid:code", "VARCHAR", "MGRS grid code, such as MGRS-31UET. `_tile` is the bare id."),
     ("mgrs:utm_zone", "BIGINT", "UTM zone number, 1-60."),
     ("mgrs:latitude_band", "VARCHAR", "MGRS latitude band letter."),
     ("mgrs:grid_square", "VARCHAR", "MGRS 100 km grid square."),
@@ -79,11 +79,11 @@ COLUMNS = [
     ("s2:thin_cirrus_percentage", "DOUBLE", _PCT),
     ("s2:snow_ice_percentage", "DOUBLE", _PCT),
     ("s2:product_type", "VARCHAR", "Always 'S2MSI2A'."),
-    ("s2:processing_baseline", "VARCHAR", "e.g. 05.13."),
+    ("s2:processing_baseline", "VARCHAR", "such as 05.13."),
     ("s2:product_uri", "VARCHAR", "ESA product name."),
     ("s2:generation_time", "VARCHAR", "Processing generation time; dedupe tiebreak."),
     ("s2:datatake_id", "VARCHAR", "ESA datatake id."),
-    ("s2:datatake_type", "VARCHAR", "e.g. INS-NOBS."),
+    ("s2:datatake_type", "VARCHAR", "such as INS-NOBS."),
     ("s2:datastrip_id", "VARCHAR", "ESA datastrip id."),
     ("s2:reflectance_conversion_factor", "DOUBLE", "Sun-distance reflectance factor."),
     ("view:azimuth", "DOUBLE", "Mean viewing azimuth angle, degrees."),
@@ -107,7 +107,7 @@ COLUMNS = [
      "ST_Hilbert(geometry, world bounds). Query helper, not STAC; not a sort "
      "key here."),
     ("_tile", "VARCHAR",
-     "MGRS tile id from grid:code, e.g. 31UET. THE spatial join key and the "
+     "MGRS tile id from grid:code, such as 31UET. The spatial join key and the "
      "first sort key; datetime is the second."),
     ("geometry", "GEOMETRY", "Scene footprint, CRS84."),
 ]

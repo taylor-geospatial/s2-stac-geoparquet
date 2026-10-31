@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SORTS, filterRows, sortRows, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered }
-  from "./results.js";
+import { SORTS, filterRows, sortRows, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered,
+  trimToBudget } from "./results.js";
 
 const day = (d) => Date.parse(`${d}T12:00:00Z`);
 const rows = [
@@ -84,4 +84,36 @@ test("whyFiltered names each failing gate and the value that admits the row", ()
   for (const r of rows) {
     assert.equal(whyFiltered(r, f).length === 0, filterRows([r], f).length === 1, r.id);
   }
+});
+
+const cacheOf = (n, tag) =>
+  new Map(Array.from({ length: n }, (_, i) => [`${tag}${i}`, i]));
+
+test("trimToBudget empties the least recent cache before the next one", () => {
+  // Under budget: nothing goes.
+  const under = [cacheOf(10, "a"), cacheOf(10, "b")];
+  assert.equal(trimToBudget(under, 400), 20);
+  assert.deepEqual(under.map((c) => c.size), [10, 10]);
+
+  // Over budget: the first cache gives up exactly the overflow.
+  const some = [cacheOf(100, "a"), cacheOf(100, "b")];
+  assert.equal(trimToBudget(some, 150), 150);
+  assert.deepEqual(some.map((c) => c.size), [50, 100]);
+  // It gave up its oldest keys and kept its newest.
+  assert.equal(some[0].has("a0"), false);
+  assert.equal(some[0].has("a99"), true);
+
+  // A bigger overflow empties the first and takes from the second. The last
+  // cache is the scene on the map, so it is the last to lose anything.
+  const lots = [cacheOf(100, "a"), cacheOf(100, "b"), cacheOf(100, "c")];
+  assert.equal(trimToBudget(lots, 120), 120);
+  assert.deepEqual(lots.map((c) => c.size), [0, 20, 100]);
+
+  // A budget of 0 empties every cache, and the walk still terminates.
+  const all = [cacheOf(5, "a"), cacheOf(5, "b")];
+  assert.equal(trimToBudget(all, 0), 0);
+  assert.deepEqual(all.map((c) => c.size), [0, 0]);
+
+  // No caches at all is 0, not a throw.
+  assert.equal(trimToBudget([], 400), 0);
 });

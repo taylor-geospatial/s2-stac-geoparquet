@@ -66,7 +66,7 @@ from s2_build import (  # noqa: E402
 )
 from s2_collections import CollectionConfig  # noqa: E402
 
-S3 = "s3://us-west-2.opendata.source.coop/portolan-mirrors/sentinel-2-catalog"
+S3 = "s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet"
 REPO = "https://github.com/taylor-geospatial/s2-stac-geoparquet"
 APP = "https://research.taylorgeospatial.org/s2-stac-geoparquet/"
 
@@ -401,7 +401,7 @@ def providers(config: CollectionConfig) -> list[dict]:
                           "Copernicus programme.",
            "roles": ["producer", "licensor"],
            "url": "https://sentinels.copernicus.eu/web/sentinel/missions/sentinel-2"}
-    portolan = {"name": "Portolan Mirrors",
+    portolan = {"name": "Taylor Geospatial",
                 "description": "Republishes the Earth Search item index as "
                                "partitioned STAC-GeoParquet.",
                 "roles": ["processor", "host"],

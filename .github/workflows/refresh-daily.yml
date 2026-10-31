@@ -107,7 +107,7 @@ jobs:
         id: guard
         run: |
           set -uo pipefail
-          if curl -fsI https://data.source.coop/portolan-mirrors/sentinel-2-catalog/catalog.json > /dev/null; then
+          if curl -fsI https://data.source.coop/tge-labs/s2-stac-geoparquet/catalog.json > /dev/null; then
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::catalog not yet published; nothing to refresh"
@@ -149,7 +149,7 @@ jobs:
       - name: Plan every year in the slice
         if: steps.guard.outputs.published == 'true'
         env:
-          BASE: https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a
+          BASE: https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a
         run: |
           set -euo pipefail
           python3 - << 'EOF'
@@ -203,7 +203,7 @@ jobs:
         if: steps.guard.outputs.published == 'true'
         run: |
           set -euo pipefail
-          BASE=https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-l2a
+          BASE=https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-l2a
           while read -r Y; do
             [ -n "$Y" ] || continue
             SRC="./staging/chunks"
@@ -241,7 +241,7 @@ jobs:
         if: steps.guard.outputs.published == 'true'
         run: |
           set -euo pipefail
-          BASE=https://data.source.coop/portolan-mirrors/sentinel-2-catalog
+          BASE=https://data.source.coop/tge-labs/s2-stac-geoparquet
           NOW=$(date -u +%Y)
           SRC=()
           YEARS=""
@@ -300,7 +300,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          TIMELINE=https://data.source.coop/portolan-mirrors/sentinel-2-catalog/stats-c1/timeline.parquet
+          TIMELINE=https://data.source.coop/tge-labs/s2-stac-geoparquet/stats-c1/timeline.parquet
           for y in $(seq 2015 "$(date -u +%Y)"); do
             mkdir -p "staging/baseline/sentinel-2-c1-l2a/year=$y"
           done
@@ -333,7 +333,7 @@ jobs:
         if: steps.guard.outputs.published == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}
           aws-region: us-west-2
       - name: Upload data
@@ -361,14 +361,14 @@ jobs:
       id-token: write
     env:
       COLLECTION: sentinel-2-c1-l2a
-      BASE: https://data.source.coop/portolan-mirrors/sentinel-2-catalog/sentinel-2-c1-l2a
-      STATS_BASE: https://data.source.coop/portolan-mirrors/sentinel-2-catalog/stats-c1
+      BASE: https://data.source.coop/tge-labs/s2-stac-geoparquet/sentinel-2-c1-l2a
+      STATS_BASE: https://data.source.coop/tge-labs/s2-stac-geoparquet/stats-c1
     steps:
       - name: Check the catalog is published
         id: guard
         run: |
           set -uo pipefail
-          if curl -fsI https://data.source.coop/portolan-mirrors/sentinel-2-catalog/catalog.json > /dev/null; then
+          if curl -fsI https://data.source.coop/tge-labs/s2-stac-geoparquet/catalog.json > /dev/null; then
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::catalog not yet published; nothing to refresh"
@@ -695,7 +695,7 @@ jobs:
         if: steps.guard.outputs.published == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::939788573396:role/source-coop-portolan-mirrors
+          role-to-assume: ${{ vars.SOURCE_COOP_ROLE_ARN }}
           role-session-name: ${{ github.event.repository.name }}-${{ github.run_id }}-c1
           aws-region: us-west-2
       # Upload order matters on the run that migrates a year (the step

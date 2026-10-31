@@ -2,7 +2,7 @@
 """Four ways to issue a search's concurrent range reads, timed in real Chrome.
 
     python3 tools/rails/experiments/parallel_probe.py \
-        --url https://data.source.coop/portolan-mirrors/sentinel-2-catalog/\
+        --url https://data.source.coop/tge-labs/s2-stac-geoparquet/\
 sentinel-2-c1-l2a/year=2024/items.parquet --tile 31UFU --reps 5
 
 Section A of docs/c1-search-speed-brief.md. The previous experiment

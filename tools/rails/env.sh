@@ -39,7 +39,7 @@ export REPO="${REPO:-$HOME/s2-catalog}"
 
 # The published catalog, and the collection this lane builds.
 export COLLECTION=sentinel-2-c1-l2a
-export PUBLIC_BASE="${PUBLIC_BASE:-https://data.source.coop/portolan-mirrors/sentinel-2-catalog}"
+export PUBLIC_BASE="${PUBLIC_BASE:-https://data.source.coop/tge-labs/s2-stac-geoparquet}"
 # upload.py --key-prefix: a directory inserted between the catalog prefix
 # and the file's path. Empty for the real catalog.
 export KEY_PREFIX="${KEY_PREFIX:-}"
