@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { viewKeyOf, viewChangedEnough, WarmBudget, rungFor, toneOf } from "./warm.js";
+import { viewKeyOf, viewChangedEnough, WarmBudget, rungFor, toneOf, staleRungs } from "./warm.js";
 
 const view = (zoom, w, s, e, n) => ({ zoom, bounds: [w, s, e, n] });
 
@@ -56,4 +56,17 @@ test("tone 1 survives a view change and tone 2 does not", () => {
   assert.equal(toneOf(e, "v2", "TCI"), 1);
   assert.equal(toneOf(e, "v1", "TCI"), 2);
   assert.equal(toneOf(null, "v1", "TCI"), 0);
+});
+
+test("staleRungs names every sharp rung the live view retired", () => {
+  const entries = new Map([
+    ["a", { hd: true, viewKey: "v1", specKey: "TCI" }],
+    ["b", { hd: true, viewKey: "v2", specKey: "TCI" }],
+    ["c", { hd: true, viewKey: "v2", specKey: "B08+B04" }],
+    ["d", { hd: false, viewKey: null, specKey: null }],
+  ]);
+  // Live generation is v2/TCI: "a" is from another view, "c" another band
+  // set, "d" was never sharp. Only those two need retiring.
+  assert.deepEqual(staleRungs(entries, "v2", "TCI").sort(), ["a", "c"]);
+  assert.deepEqual(staleRungs(entries, "v2", "B08+B04").sort(), ["a", "b"]);
 });

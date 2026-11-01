@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tileProps, destroyTileTextures, levelForResolution, tileRangeFor,
-  bandWindowImage } from "./cog.js";
+  bandWindowImage, commonResolution, destroyLayerTextures } from "./cog.js";
 
 test("tileProps does not cap the ancestor walk", () => {
   const p = tileProps([0, 0, 1, 1], {});
@@ -88,4 +88,60 @@ test("bandWindowImage stamps the band set it was built from", async () => {
   assert.equal(img.specKey, "B08+B04");
   assert.equal(img.kind, "bands");
   assert.equal(img.arrays.size, 2);
+});
+
+test("tileRangeFor adds a one-tile margin around the view", () => {
+  // A 5 x 5 tile grid, view over the middle tile only. Without a margin the
+  // range is the single tile (2,2); the sharp rung would then stop at the
+  // view edge, and a pan under the threshold shows bare ground.
+  const level = fakeLevel(2560, 2560, 512, 512, { x: 5, y: 5 });
+  const r = tileRangeFor(level, [0, 0, 1, 1], [0.45, 0.45, 0.55, 0.55]);
+  assert.deepEqual(r, { minCol: 1, maxCol: 3, minRow: 1, maxRow: 3 });
+});
+
+test("tileRangeFor keeps the margin inside the level", () => {
+  const level = fakeLevel(1372, 1372, 512, 512, { x: 3, y: 3 });
+  const r = tileRangeFor(level, [0, 0, 1, 1], [-5, -5, 5, 5]);
+  assert.deepEqual(r, { minCol: 0, maxCol: 2, minRow: 0, maxRow: 2 });
+});
+
+// A 20 m band's pyramid is half the width of a 10 m band's at every rung.
+// levelForResolution picks per band, so a target between the two rungs used
+// to give the two bands different grids and the composite came out shifted.
+const stubCogAt = (baseWidth) => {
+  const mk = (w) => ({
+    width: w, height: w, tileWidth: 512, tileHeight: 512,
+    tileCount: { x: Math.ceil(w / 512), y: Math.ceil(w / 512) },
+    fetchTiles: async (xy) => xy.map(([x, y]) => ({ x, y, array: {
+      width: 512, height: 512, count: 1, layout: "pixel-interleaved",
+      transform: [20, 0, 0, 0, -20, 0], data: new Uint8Array(512 * 512),
+    } })),
+  });
+  const fine = mk(baseWidth);
+  return { w: baseWidth, h: baseWidth, bounds: [0, 0, 1, 1],
+    geotiff: { ...fine, overviews: [mk(baseWidth / 2)], bbox: [0, 0, 20480, 20480] } };
+};
+
+test("a mixed-resolution composite reads every band at one resolution", () => {
+  // 20480 m span. The 10 m band's rungs are 10 and 20 m/px; the 20 m
+  // band's are 20 and 40. At a 15 m target the 10 m band alone would take
+  // its 10 m rung and the two bands would land on different tile grids.
+  const fine = stubCogAt(2048);
+  const coarse = stubCogAt(1024);
+  assert.equal(levelForResolution(fine, 15).width, 2048);
+  assert.equal(commonResolution([fine, coarse], 15), 20);
+  // Read at the common value and both bands pick the same 1024 px level.
+  assert.equal(levelForResolution(fine, 20).width, 1024);
+  assert.equal(levelForResolution(coarse, 20).width, 1024);
+});
+
+test("destroyLayerTextures frees nothing for an unknown layer", () => {
+  assert.equal(destroyLayerTextures("no-such-layer"), 0);
+});
+
+test("tileProps keeps a tile-count bound beside the byte budget", () => {
+  // deck.gl sets maxCacheSize to Infinity once maxCacheByteSize is given,
+  // so the count bound has to be stated or the resident set is unbounded.
+  const p = tileProps([0, 0, 1, 1], {});
+  assert.ok(Number.isFinite(p.maxCacheSize) && p.maxCacheSize > 0);
 });

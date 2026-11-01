@@ -43,7 +43,7 @@ import { MVTLoader } from "@loaders.gl/mvt";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { PMTiles, Protocol } from "pmtiles";
-import { canSampleUint16, cogTileLayer, destroyTileTextures, previewImage, previewLayer, openScene, sceneCog,
+import { canSampleUint16, cogTileLayer, destroyTileTextures, destroyLayerTextures, previewImage, previewLayer, openScene, sceneCog,
   windowImage, bandWindowImage,
   loadOverviews, sceneIndexStats, bandPreviewImage, bandTileLayer,
   tciOverviewImage } from "./cog.js";
@@ -52,7 +52,7 @@ import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSE
 import { dayRange, valueRange } from "./rangeslider.js";
 import { sceneRows, warmPart, readTable, keyedRows, fmtSecs } from "./search.js";
 import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
-import { viewKeyOf, viewChangedEnough, WarmBudget, rungFor, toneOf } from "./warm.js";
+import { viewKeyOf, viewChangedEnough, WarmBudget, rungFor, toneOf, staleRungs } from "./warm.js";
 // deck.gl, luma.gl and @developmentseed/deck.gl-geotiff are bundled into this
 // module by Vite, so there is one copy of each. The raster layers build
 // luma.gl textures and hand them to the shader pipeline this page's own Deck
@@ -682,6 +682,15 @@ let lookup = new Map();
 let paintKey = 0;
 let hovered = null;          // the hovered feature (GeoJSON, WGS84) or null
 let cogLayer = null;         // the shown scene's TileLayer, or null
+// Replace the shown tile layer and free what the old one held. deck.gl
+// clears a tileset's cache on finalize without unloading its tiles, so a
+// layer that goes out under a new id takes its whole resident set of GPU
+// textures with it unless they are freed here. A rebuild under the same id
+// is a restyle: deck.gl keeps the tiles, so nothing is freed.
+function setCogLayer(next) {
+  if (cogLayer && cogLayer.id !== next?.id) destroyLayerTextures(cogLayer.id);
+  cogLayer = next;
+}
 let cogPreview = null;       // its thumbnail rung, beneath the tiles until they load
 let scrubLayer = null;       // the scrub bar's live thumbnail preview, or null
 
@@ -2561,16 +2570,31 @@ map.on("moveend", tilesSettled);
 // the track stops counting them and the queue reads the new view.
 map.on("moveend", () => {
   if (!refreshWarmView()) return;
-  paintScrubTrack();
-  prefetchScrubStack();
+  retireSharpRungs();
 });
-// A band change retires the sharp rungs the same way. toneOf demotes them
-// on its own, because specKey no longer matches, so this only has to read
-// the new band set.
-function restartScrubForBands() {
+// Put every rung the live view or band set retired back on its soft rung,
+// then read the new generation. Both halves matter. Without the downgrade
+// the queue skips each id it already sharpened, so nothing re-sharpens,
+// and entry.img still holds the retired read, so the scrub paints the old
+// window or the old colours.
+let lastQueueKey = "";
+function retireSharpRungs() {
+  const specKey = liveSpecKey();
+  const key = `${warmViewKey}|${specKey}`;
+  // Idempotent, so every path that can change the view or the spec may
+  // call it. Only a real generation change does work.
+  if (key === lastQueueKey) return;
+  lastQueueKey = key;
+  for (const id of staleRungs(scrubEntries, warmViewKey, specKey)) {
+    downgradeScrubHd(id);
+  }
   paintScrubTrack();
   prefetchScrubStack();
 }
+// A band change and a restyle retire the sharp rungs the same way a view
+// change does, because the rung freezes the band set and the stretch at
+// read time.
+const restartScrubForBands = retireSharpRungs;
 
 // The image nav strip's zoom-to: re-frame the shown scene's footprint.
 // A separate listener from tilesSettled — this one only reads the camera,
@@ -2711,7 +2735,19 @@ function scrubPreviewFor(row) {
         const scene = openScene(id, sceneDirOf(row));
         const cog = await sceneCog(scene, "TCI");
         const bitmap = await thumbBitmapFor(row);
-        if (!bitmap) return null;
+        if (!bitmap) {
+          // No thumbnail at all. The COG is already open, so read its
+          // coarsest rung instead. Without this the scrub leaves the
+          // previous date on the map and the reader reads a wrong date as
+          // the right one.
+          const fallback = await tciOverviewImage(cog).catch(() => null);
+          if (!fallback) return null;
+          scrubReady.add(id);
+          const bare = { img: fallback, cog, scene, thumb: fallback, hd: false,
+            overview: fallback, viewKey: null, specKey: null };
+          scrubEntries.set(id, bare);
+          return bare;
+        }
         const white = /\/thumbnail\.jpg$/i.test(new URL(row.thumbnail_url).pathname);
         // A thumbnail whose aspect does not match the COG used to give no
         // entry at all, so the scrub showed nothing on that date. The soft
@@ -2739,6 +2775,7 @@ function scrubPreviewFor(row) {
       scrubReady.delete(evicted);
       scrubReadyHd.delete(evicted);
       warmBudget.delete(evicted);
+      overviewBudget.delete(evicted);
     }
   }
   return scrubPreviews.get(id);
@@ -2861,6 +2898,10 @@ const SCRUB_HD_MAX = 20;
 // the budget counts bytes and the oldest goes first.
 const WARM_BYTES = 192 * 1024 * 1024;
 const warmBudget = new WarmBudget(WARM_BYTES);
+// The idle whole-scene rung is host memory too, and it outlives a view
+// generation, so it needs its own bound. One overview is about 5.6 MB.
+const OVERVIEW_BYTES = 96 * 1024 * 1024;
+const overviewBudget = new WarmBudget(OVERVIEW_BYTES);
 // The view generation every sharp rung belongs to. A rung read for another
 // generation shows another place, so rungFor refuses it.
 let warmView = null;
@@ -2885,7 +2926,13 @@ function refreshWarmView(force = false) {
   warmViewKey = viewKeyOf(next);
   return true;
 }
-const liveSpecKey = () => bandSpec(shown).bands.join("+");
+// The key a sharp rung is stamped with. It carries the band set and the
+// stretch, because the read bakes both into the image: a rung read before
+// a gamma change paints the old stretch under a map that shows the new one.
+const liveSpecKey = () => {
+  const spec = bandSpec(shown);
+  return `${spec.bands.join("+")}|${styleKeyOf(spec)}`;
+};
 // The entry whose `img` the current scrubLayer was built from, or null. Only
 // ever read together with `scrubLayer`, which every clear path nulls — so a
 // stale value here cannot make the upgrade below put a layer back on a map
@@ -2921,6 +2968,13 @@ async function upgradeScrubStack(order, seq) {
 async function fillScrubOverviews(order, seq) {
   for (let n = 0; n < order.length && n < SCRUB_HD_MAX; n++) {
     if (seq !== prefetchSeq) return;
+    // A committed scene owns the connection pool until it settles, the
+    // same rule the windowed pass above follows.
+    const waitUntil = Date.now() + 30000;
+    while (shown && !shown.settled && !shown.failed && Date.now() < waitUntil) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (seq !== prefetchSeq) return;
+    }
     const row = order[n];
     const id = String(row.id);
     const p = scrubPreviewFor(row);
@@ -2936,13 +2990,26 @@ async function fillScrubOverviews(order, seq) {
     if (seq !== prefetchSeq) return;
     if (!img || scrubPreviews.get(id) !== p) continue;
     entry.overview = img;
+    overviewBudget.add(id, img.byteLength);
+    for (const dropped of overviewBudget.evictTo()) dropOverview(dropped);
     // The soft rung only. A sharp rung for the live view outranks it.
+    // `thumb` is left alone: it is the rung a downgrade falls back to, and
+    // overwriting it made the overview impossible to release.
     if (!entry.hd) {
       entry.img = img;
-      entry.thumb = img;
       paintScrubTrack();
     }
   }
+}
+
+// Release one scene's whole-scene overview and fall back to its thumbnail.
+function dropOverview(id) {
+  overviewBudget.delete(id);
+  scrubPreviews.get(id)?.then((entry) => {
+    if (!entry || !entry.overview) return;
+    if (entry.img === entry.overview) entry.img = entry.thumb;
+    entry.overview = null;
+  }).catch(() => null);
 }
 
 async function upgradeScrubPreview(row, seq) {
@@ -3023,7 +3090,7 @@ function downgradeScrubHd(id) {
   // fresh upgrade of this same id in between must win over the downgrade.
   p.then((entry) => {
     if (!entry || !entry.hd || scrubReadyHd.has(id)) return;
-    entry.img = entry.thumb;
+    entry.img = entry.overview ?? entry.thumb;
     entry.hd = false;
     entry.viewKey = null;
     entry.specKey = null;
@@ -3215,7 +3282,7 @@ async function applySpec(me = shown) {
   } catch (err) {
     if (stale(me, serial)) return;
     shown = null;
-    cogLayer = null; cogPreview = null; render();
+    setCogLayer(null); cogPreview = null; render();
     hideImagePanel();
     say(`Could not show ${me.id} — ${err.message}`, true);
   }
@@ -3234,9 +3301,10 @@ function scheduleRestyle() {
 async function showBands(me, spec, serial) {
   const { id } = me;
   me.bandsKey = spec.bands.join("+"); me.spec = spec;
+  retireSharpRungs();
   me.settled = false; me.failed = false; me.tilesLoaded = false;
   me.loading = true;
-  cogLayer = null; cogPreview = null; render();
+  setCogLayer(null); cogPreview = null; render();
   syncPanel(spec, me);
   // The old channel blocks go now: a handle dragged during the load would
   // write into ranges the new blocks are about to be built from.
@@ -3271,7 +3339,7 @@ async function showBandsLoaded(me, spec, serial, failed) {
   spec = me.spec = bandSpec(me);
   syncPanel(spec, me);
   buildChannels(me, spec);
-  cogLayer = bandTileLayer(me.scene, spec, styleKeyOf(spec), `cog-${id}-${me.bandsKey}`, me.eventsFor(me.bandsKey));
+  setCogLayer(bandTileLayer(me.scene, spec, styleKeyOf(spec), `cog-${id}-${me.bandsKey}`, me.eventsFor(me.bandsKey)));
   // The real bands are on the map now; the flat scrub thumbnail that
   // bridged the release has done its job.
   scrubLayer = null;
@@ -3312,7 +3380,7 @@ function uint16Unsupported(me, spec) {
 function restyle(me, spec) {
   me.spec = spec;
   syncPanel(spec, me);
-  if (cogLayer) cogLayer = bandTileLayer(me.scene, spec, styleKeyOf(spec), cogLayer.id, me.eventsFor(me.bandsKey));
+  if (cogLayer) setCogLayer(bandTileLayer(me.scene, spec, styleKeyOf(spec), cogLayer.id, me.eventsFor(me.bandsKey)));
   if (cogPreview) {
     const img = bandPreviewImage(me.scene, spec);
     cogPreview = img ? previewLayer(img, me.scene, cogPreview.id) : null;
@@ -3328,7 +3396,7 @@ async function showTci(me, spec, serial) {
   const { id, r } = me;
   me.bandsKey = "TCI"; me.missing = [];
   me.settled = false; me.failed = false; me.tilesLoaded = false;
-  cogLayer = null; cogPreview = null; render();
+  setCogLayer(null); cogPreview = null; render();
   cogbar(id, "loading", "Loading preview…");
   say(`Preview of ${id} (True color) — loading full-resolution tiles…`);
   me.bitmapP ??= thumbnailBitmap(r.thumbnail_url);
@@ -3340,7 +3408,7 @@ async function showTci(me, spec, serial) {
   const warmTiles = false;
   const cog = await sceneCog(me.scene, "TCI");
   if (stale(me, serial)) return;
-  cogLayer = cogTileLayer(cog, `cog-${id}-TCI`, me.eventsFor("TCI"));
+  setCogLayer(cogTileLayer(cog, `cog-${id}-TCI`, me.eventsFor("TCI")));
   // The real tiles are registered; the flat scrub thumbnail that bridged
   // the release has done its job.
   scrubLayer = null;
@@ -3395,7 +3463,7 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   if (button) button.disabled = true;
   // A scene already on the map comes off now, not when this one is ready:
   // the bar names this scene from here on and the map must not contradict it.
-  if (cogLayer || cogPreview) { cogLayer = null; cogPreview = null; render(); }
+  if (cogLayer || cogPreview) { setCogLayer(null); cogPreview = null; render(); }
   cogbar(id, "loading", "Loading preview…");
   // The user asked to see an image: on a phone the sheet drops to peek, so
   // the map, and the scene now being drawn on it, is what fills the screen.
@@ -3433,7 +3501,7 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   } catch (err) {
     if (me !== shown) return;
     shown = null;
-    cogLayer = null; cogPreview = null; render();
+    setCogLayer(null); cogPreview = null; render();
     hideImagePanel();
     say(`Could not show ${id} — ${err.message}`, true);
   } finally {
@@ -3448,7 +3516,7 @@ $("cog-clear").addEventListener("click", clearShown);
 function clearShown() {
   shown = null;
   S.displayedId = null;
-  cogLayer = null;
+  setCogLayer(null);
   cogPreview = null;
   render();
   hideImagePanel();

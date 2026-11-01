@@ -84,3 +84,16 @@ export function toneOf(entry, viewKey, specKey) {
   if (!entry) return 0;
   return rungFor(entry, viewKey, specKey) === "sharp" ? 2 : 1;
 }
+
+// The ids whose sharp rung no longer serves the live view or band set. A
+// rung that fails rungFor is not merely uncounted on the track: its image
+// is still what the scrub would paint, so the caller must put it back on
+// its soft rung. Without this the queue skips every id it already
+// sharpened, and the feature works once.
+export function staleRungs(entries, viewKey, specKey) {
+  const stale = [];
+  for (const [id, entry] of entries) {
+    if (entry?.hd && rungFor(entry, viewKey, specKey) !== "sharp") stale.push(id);
+  }
+  return stale;
+}

@@ -55,6 +55,10 @@ import {
 // tile, so deck.gl counts real bytes here. Without a budget the cache never
 // evicts, and the textures below are never freed.
 const TILE_CACHE_BYTES = 512 * 1024 * 1024;
+// deck.gl sets maxCacheSize to Infinity as soon as maxCacheByteSize is
+// given (tileset-2d.js, _resizeCache). The count bound it would otherwise
+// derive is 5 x the selected tiles, so state it instead of losing it.
+const TILE_CACHE_COUNT = 400;
 const PREVIEW_MIN = 256;    // the stats overview's long side, at least
 const HD_TARGET = 1200;     // the mid-resolution rung's long side
 
@@ -218,16 +222,23 @@ export function tileRangeFor(level, cogBounds, viewBounds) {
   const y1 = Math.min(north, viewBounds[3]);
   if (x1 <= x0 || y1 <= y0) return null;
   const clamp = (v, hi) => Math.min(Math.max(v, 0), hi);
+  // One tile of margin on every side. cog.bounds comes from sampling the
+  // curved UTM edges, so the degrees-to-pixels map below is approximate at
+  // Sentinel-2 scale. viewChangedEnough also lets the view pan by a quarter
+  // of its width before a new generation starts. Both leave the window
+  // short of the screen, and short means bare ground. A tile is cheap: the
+  // reads are coalesced into a few ranges.
+  const MARGIN = 1;
   // Row 0 sits at the north edge, so the row fractions invert the latitudes.
   const fx0 = (x0 - west) / (east - west);
   const fx1 = (x1 - west) / (east - west);
   const fy0 = (north - y1) / (north - south);
   const fy1 = (north - y0) / (north - south);
   return {
-    minCol: clamp(Math.floor((fx0 * level.width) / level.tileWidth), level.tileCount.x - 1),
-    maxCol: clamp(Math.ceil((fx1 * level.width) / level.tileWidth) - 1, level.tileCount.x - 1),
-    minRow: clamp(Math.floor((fy0 * level.height) / level.tileHeight), level.tileCount.y - 1),
-    maxRow: clamp(Math.ceil((fy1 * level.height) / level.tileHeight) - 1, level.tileCount.y - 1),
+    minCol: clamp(Math.floor((fx0 * level.width) / level.tileWidth) - MARGIN, level.tileCount.x - 1),
+    maxCol: clamp(Math.ceil((fx1 * level.width) / level.tileWidth) - 1 + MARGIN, level.tileCount.x - 1),
+    minRow: clamp(Math.floor((fy0 * level.height) / level.tileHeight) - MARGIN, level.tileCount.y - 1),
+    maxRow: clamp(Math.ceil((fy1 * level.height) / level.tileHeight) - 1 + MARGIN, level.tileCount.y - 1),
   };
 }
 
@@ -324,7 +335,7 @@ const NEAREST = { minFilter: "nearest", magFilter: "nearest" };
 // This mirrors the library's own inferred pipeline for unsigned-integer data,
 // through the helpers it exports for the purpose (addAlphaChannel,
 // inferTextureFormat), and differs only in the modules it appends.
-function singleSourcePipeline(cog, sampler, modules) {
+function singleSourcePipeline(cog, sampler, modules, layerId) {
   const { bitsPerSample, sampleFormat } = cog.geotiff.cachedTags;
   const getTileData = async (image, { device, x, y, signal, pool }) => {
     const tile = await image.fetchTile(x, y, { boundless: false, pool, signal });
@@ -341,8 +352,9 @@ function singleSourcePipeline(cog, sampler, modules) {
       width: array.width, height: array.height,
       sampler,
     });
+    registerTexture(layerId, texture);
     return {
-      texture, width: array.width, height: array.height,
+      texture, layerId, width: array.width, height: array.height,
       byteLength: array.data.byteLength,
     };
   };
@@ -370,6 +382,7 @@ function singleSourcePipeline(cog, sampler, modules) {
 export const tileProps = (bounds, events) => ({
   extent: bounds,
   maxCacheByteSize: TILE_CACHE_BYTES,
+  maxCacheSize: TILE_CACHE_COUNT,
   maxRequests: 6,
   refinementStrategy: "no-overlap",
   epsgResolver,
@@ -381,11 +394,39 @@ export const tileProps = (bounds, events) => ({
 // so COGLayer hands the duty back (see cog-layer.js, _onTileUnloadCallback)
 // and the app must pass this as onTileUnload. Without it every evicted tile
 // leaks its texture.
+// Tileset2D.finalize() clears its cache without calling onTileUnload, and
+// neither COGLayer nor MultiCOGLayer frees the textures on the way out. A
+// scene commit and a band change both build a layer under a new id, so the
+// outgoing layer's whole resident set would leak. Every texture this module
+// creates is registered against its layer id here, and app.js frees the set
+// when it drops the layer.
+const layerTextures = new Map();
+const registerTexture = (layerId, texture) => {
+  if (!layerId) return;
+  let set = layerTextures.get(layerId);
+  if (!set) layerTextures.set(layerId, (set = new Set()));
+  set.add(texture);
+};
+
+// Free every texture still registered to a layer id, and forget the id.
+export function destroyLayerTextures(layerId) {
+  const set = layerTextures.get(layerId);
+  if (!set) return 0;
+  let freed = 0;
+  for (const texture of set) {
+    if (texture && typeof texture.destroy === "function") { texture.destroy(); freed++; }
+  }
+  layerTextures.delete(layerId);
+  return freed;
+}
+
 export function destroyTileTextures(data) {
   if (!data) return;
   for (const key of ["texture", "mask"]) {
     const texture = data[key];
-    if (texture && typeof texture.destroy === "function") texture.destroy();
+    if (!texture || typeof texture.destroy !== "function") continue;
+    layerTextures.get(data.layerId)?.delete(texture);
+    texture.destroy();
   }
 }
 
@@ -402,7 +443,7 @@ export function cogTileLayer(cog, id = "cog", events = {}) {
     id,
     geotiff: cog.geotiff,
     ...tileProps(cog.bounds, events),
-    ...singleSourcePipeline(cog, LINEAR, [tciModule(cog)]),
+    ...singleSourcePipeline(cog, LINEAR, [tciModule(cog)], id),
   });
 }
 
@@ -467,8 +508,9 @@ class SingleBandLayer extends CompositeLayer {
   static layerName = "SingleBandLayer";
 
   renderLayers() {
-    const { cog, spec, sampler, extent, minZoom, maxZoom, maxRequests,
-      refinementStrategy, epsgResolver, onViewportLoad, onTileError } = this.props;
+    const { cog, spec, sampler, extent, maxRequests, maxCacheByteSize,
+      maxCacheSize, refinementStrategy, epsgResolver, onViewportLoad,
+      onTileError, onTileUnload } = this.props;
     const pipeline = spec.kind === "scl"
       ? [sclModule(spec, { valueScale: cog.valueScale, device: this.context.device })]
       : [tciModule(cog)];
@@ -480,9 +522,9 @@ class SingleBandLayer extends CompositeLayer {
     return new COGLayer(this.getSubLayerProps({
       id: "cog",
       geotiff: cog.geotiff,
-      extent, minZoom, maxZoom, maxRequests, refinementStrategy, epsgResolver,
-      onViewportLoad, onTileError,
-      ...singleSourcePipeline(cog, sampler, pipeline),
+      extent, maxRequests, maxCacheByteSize, maxCacheSize, refinementStrategy,
+      epsgResolver, onViewportLoad, onTileError, onTileUnload,
+      ...singleSourcePipeline(cog, sampler, pipeline, this.props.id),
     }));
   }
 }
@@ -568,6 +610,22 @@ export function bandPreviewImage(scene, spec) {
   };
 }
 
+// The coarsest resolution any of these COGs can serve at the given target.
+// Every band of a composite must read at one resolution. A 20 m band's
+// pyramid is half the width of a 10 m band's at every rung, so a level
+// chosen per band puts the two windows on different tile grids. The
+// composite then samples the secondary band through the primary's identity
+// UV and comes out shifted.
+export function commonResolution(cogs, metersPerPixel) {
+  let coarsest = 0;
+  for (const cog of cogs) {
+    const level = levelForResolution(cog, metersPerPixel);
+    const span = cog.geotiff.bbox[2] - cog.geotiff.bbox[0];
+    coarsest = Math.max(coarsest, span / level.width);
+  }
+  return coarsest;
+}
+
 // The band composite of one view, in the shape bandPreviewImage returns.
 // Each band is read over the same window, so a sharp scrub frame shows the
 // bands the map shows. `specKey` names that band set, and the caller
@@ -575,10 +633,26 @@ export function bandPreviewImage(scene, spec) {
 // after the user switches preset must not paint the old colours.
 export async function bandWindowImage(scene, spec, viewBounds, metersPerPixel, signal) {
   const bands = bandsOf(spec);
-  const arrays = new Map();
+  const cogs = new Map();
   for (const band of bands) {
-    const cog = await sceneCog(scene, band);
-    const image = await windowImage(cog, viewBounds, metersPerPixel, signal);
+    try {
+      cogs.set(band, await sceneCog(scene, band));
+    } catch {
+      // One band that will not open must not lose the whole composite.
+      // bandPreviewImage tolerates the same case.
+    }
+  }
+  if (!cogs.size) return null;
+  // Every band must land on one grid. A 20 m band's pyramid is half the
+  // width of a 10 m band's at every rung, so picking a level per band puts
+  // the two windows on different tile grids. The composite then samples
+  // the secondary band through the primary's identity UV and comes out
+  // shifted. Take the coarsest level any band needs and read them all
+  // there: equal metres per pixel over equal bounds is one grid.
+  const commonMpp = commonResolution([...cogs.values()], metersPerPixel);
+  const arrays = new Map();
+  for (const [band, cog] of cogs) {
+    const image = await windowImage(cog, viewBounds, commonMpp, signal);
     if (image) arrays.set(band, image);
   }
   if (!arrays.size) return null;
