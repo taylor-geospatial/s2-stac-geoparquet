@@ -16,6 +16,14 @@ export default defineConfig({
   // that worker imports its decoders, so it code-splits. Rollup refuses to
   // split an IIFE worker, which is Vite's default.
   worker: { format: "es" },
+  // Vite's dep optimizer copies a package into node_modules/.vite/deps and
+  // flattens it. `import.meta.url` in the decoder pool then points at that
+  // directory. The pool asks for "./worker.js" beside itself. No file is
+  // there. Each decode promise then waits for a worker that never starts.
+  // No COG tile loads, and the scene keeps its preview forever. This package
+  // imports no luma.gl code and no deck.gl code. The one-copy rule above
+  // still holds.
+  optimizeDeps: { exclude: ["@developmentseed/geotiff"] },
   build: {
     outDir: "dist",
     rollupOptions: {
