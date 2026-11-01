@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { tileProps, destroyTileTextures, levelForResolution, tileRangeFor } from "./cog.js";
+import { tileProps, destroyTileTextures, levelForResolution, tileRangeFor,
+  bandWindowImage } from "./cog.js";
 
 test("tileProps does not cap the ancestor walk", () => {
   const p = tileProps([0, 0, 1, 1], {});
@@ -60,4 +61,31 @@ test("tileRangeFor clamps a view that overhangs the scene", () => {
 test("tileRangeFor returns null when the view misses the scene", () => {
   const level = fakeLevel(1372, 1372, 512, 512, { x: 3, y: 3 });
   assert.equal(tileRangeFor(level, [0, 0, 1, 1], [10, 10, 11, 11]), null);
+});
+
+// One 512 px level that is exactly one tile, so windowImage's assemble and
+// crop both short-circuit and the stub needs no GPU and no real TIFF.
+const stubCog = () => {
+  const level = {
+    width: 512, height: 512, tileWidth: 512, tileHeight: 512,
+    tileCount: { x: 1, y: 1 }, overviews: [], bbox: [0, 0, 5120, 5120],
+    fetchTiles: async () => [{ array: {
+      width: 512, height: 512, count: 1, layout: "pixel-interleaved",
+      data: new Uint8Array(512 * 512),
+    } }],
+  };
+  return { w: 512, h: 512, bounds: [0, 0, 1, 1], geotiff: level };
+};
+const stubScene = () => ({
+  bounds: [0, 0, 1, 1], dir: "stub", overviews: new Map(),
+  cogs: new Map([["B08", Promise.resolve(stubCog())],
+    ["B04", Promise.resolve(stubCog())]]),
+});
+
+test("bandWindowImage stamps the band set it was built from", async () => {
+  const img = await bandWindowImage(stubScene(), { kind: "index", index: "ndvi" },
+    [0, 0, 1, 1], 100);
+  assert.equal(img.specKey, "B08+B04");
+  assert.equal(img.kind, "bands");
+  assert.equal(img.arrays.size, 2);
 });

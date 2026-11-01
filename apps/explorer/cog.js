@@ -562,6 +562,32 @@ export function bandPreviewImage(scene, spec) {
   };
 }
 
+// The band composite of one view, in the shape bandPreviewImage returns.
+// Each band is read over the same window, so a sharp scrub frame shows the
+// bands the map shows. `specKey` names that band set, and the caller
+// compares it against the live one after every await: a read that lands
+// after the user switches preset must not paint the old colours.
+export async function bandWindowImage(scene, spec, viewBounds, metersPerPixel, signal) {
+  const bands = bandsOf(spec);
+  const arrays = new Map();
+  for (const band of bands) {
+    const cog = await sceneCog(scene, band);
+    const image = await windowImage(cog, viewBounds, metersPerPixel, signal);
+    if (image) arrays.set(band, image);
+  }
+  if (!arrays.size) return null;
+  // The finest read drives the mesh; the others are sampled over it by their
+  // own UV transform, as bandPreviewImage does.
+  const primary = [...arrays.values()].reduce((a, b) =>
+    (a.array.width >= b.array.width ? a : b));
+  return {
+    kind: "bands", spec, specKey: bands.join("+"), arrays, primary,
+    cog: primary.cog,
+    width: primary.array.width, height: primary.array.height,
+    byteLength: [...arrays.values()].reduce((n, o) => n + o.byteLength, 0),
+  };
+}
+
 // A preview source as a deck.gl layer: one reprojected image over the scene,
 // drawn beneath the tile layer until every tile in view has loaded. `cog` is
 // anything carrying the bounds -- an opened COG or a band scene -- and stays
