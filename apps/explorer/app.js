@@ -43,7 +43,7 @@ import { MVTLoader } from "@loaders.gl/mvt";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { PMTiles, Protocol } from "pmtiles";
-import { canSampleUint16, cogTileLayer, previewImage, previewLayer, openScene, sceneCog,
+import { canSampleUint16, cogTileLayer, destroyTileTextures, previewImage, previewLayer, openScene, sceneCog,
   loadOverviews, sceneIndexStats, bandPreviewImage, bandTileLayer,
   tciOverviewImage } from "./cog.js";
 import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSES, PRESETS,
@@ -3289,6 +3289,9 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
       say(`A full-resolution tile of ${id} failed to load — ${err?.message ?? err}. `
         + "The preview stays under the tiles that did.", true);
     },
+    // COGLayer gives the texture duty back to whoever supplies getTileData,
+    // and cog.js supplies one. Without this every evicted tile leaks.
+    onTileUnload: (tile) => destroyTileTextures(tile.content),
     onViewportLoad: () => {
       if (me !== shown || key !== me.bandsKey) return;
       me.tilesLoaded = true;

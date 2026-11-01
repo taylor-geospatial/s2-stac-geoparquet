@@ -51,6 +51,10 @@ import {
   indexModule, sclModule, stretchModule, valueScaleFor,
 } from "./raster-modules.js";
 
+// The tile cache budget, in bytes. getTileData reports byteLength for each
+// tile, so deck.gl counts real bytes here. Without a budget the cache never
+// evicts, and the textures below are never freed.
+const TILE_CACHE_BYTES = 512 * 1024 * 1024;
 const PREVIEW_MIN = 256;    // the stats overview's long side, at least
 const HD_TARGET = 1200;     // the mid-resolution rung's long side
 
@@ -287,11 +291,25 @@ function singleSourcePipeline(cog, sampler, modules) {
 // to descriptor.levels.length - 1, so maxZoom adds nothing.
 export const tileProps = (bounds, events) => ({
   extent: bounds,
+  maxCacheByteSize: TILE_CACHE_BYTES,
   maxRequests: 6,
   refinementStrategy: "no-overlap",
   epsgResolver,
   ...events,
 });
+
+// Free the GPU textures one tile holds. COGLayer destroys textures only for
+// the pipeline it infers itself. This module supplies its own getTileData,
+// so COGLayer hands the duty back (see cog-layer.js, _onTileUnloadCallback)
+// and the app must pass this as onTileUnload. Without it every evicted tile
+// leaks its texture.
+export function destroyTileTextures(data) {
+  if (!data) return;
+  for (const key of ["texture", "mask"]) {
+    const texture = data[key];
+    if (texture && typeof texture.destroy === "function") texture.destroy();
+  }
+}
 
 const tciModule = (cog) => ({
   module: TciNodata,
