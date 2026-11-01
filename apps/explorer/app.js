@@ -2555,6 +2555,22 @@ function tilesSettled() {
     + "No tile server, no API.");
 }
 map.on("moveend", tilesSettled);
+// A move that crosses the pan threshold, or any zoom step, starts a new
+// view generation. The sharp rungs of the old one stay in memory under the
+// budget, because returning to that exact view makes them good again, but
+// the track stops counting them and the queue reads the new view.
+map.on("moveend", () => {
+  if (!refreshWarmView()) return;
+  paintScrubTrack();
+  prefetchScrubStack();
+});
+// A band change retires the sharp rungs the same way. toneOf demotes them
+// on its own, because specKey no longer matches, so this only has to read
+// the new band set.
+function restartScrubForBands() {
+  paintScrubTrack();
+  prefetchScrubStack();
+}
 
 // The image nav strip's zoom-to: re-frame the shown scene's footprint.
 // A separate listener from tilesSettled — this one only reads the camera,
@@ -2683,6 +2699,9 @@ const scrubReady = new Set();
 // thumbnail rung exists. Insertion-ordered, which is what the HD cap below
 // evicts by.
 const scrubReadyHd = new Set();
+// The settled entries, by id. scrubPreviews holds promises, and the track
+// paints on a frame, so it needs the entry without an await.
+const scrubEntries = new Map();
 const SCRUB_PREVIEWS_MAX = 120;
 function scrubPreviewFor(row) {
   const id = String(row.id);
@@ -2699,9 +2718,12 @@ function scrubPreviewFor(row) {
         // rung's job is to say the scrub moved, so take it loose instead.
         const img = previewImage(cog, bitmap, { white })
           ?? previewImage(cog, bitmap, { white, loose: true });
-        if (img) scrubReady.add(id);
-        return img ? { img, cog, scene, thumb: img, hd: false,
-          viewKey: null, specKey: null } : null;
+        if (!img) return null;
+        scrubReady.add(id);
+        const entry = { img, cog, scene, thumb: img, hd: false,
+          viewKey: null, specKey: null };
+        scrubEntries.set(id, entry);
+        return entry;
       } catch {
         // A missing/odd thumbnail_url (sceneDirOf) or a failed header read
         // (sceneCog) resolves to null rather than rejecting, so an awaiter
@@ -2713,8 +2735,10 @@ function scrubPreviewFor(row) {
     if (scrubPreviews.size > SCRUB_PREVIEWS_MAX) {
       const evicted = scrubPreviews.keys().next().value;
       scrubPreviews.delete(evicted);
+      scrubEntries.delete(evicted);
       scrubReady.delete(evicted);
       scrubReadyHd.delete(evicted);
+      warmBudget.delete(evicted);
     }
   }
   return scrubPreviews.get(id);
@@ -2757,10 +2781,14 @@ function paintScrubTrack() {
     // equal state exactly as they did on equal loadedness, so the span
     // formula and the shared hard stops are untouched — only the number of
     // distinct colours a run can take changed.
-    const state = view.map((r) => {
-      const id = String(r.id);
-      return scrubReadyHd.has(id) ? 2 : scrubReady.has(id) ? 1 : 0;
-    });
+    // Tone 1 does not depend on the view, so a zoom leaves it standing.
+    // Tone 2 does: toneOf demotes a rung read for another generation or
+    // another band set, which is what makes a zoom clear the sharp track
+    // without touching the soft one.
+    const viewKey = warmViewKey;
+    const specKey = liveSpecKey();
+    const state = view.map((r) =>
+      toneOf(scrubEntries.get(String(r.id)), viewKey, specKey));
     const tone = ["transparent", "var(--scrub-loaded)", "var(--scrub-hd)"];
     const stops = [];
     for (let start = 0; start < len;) {
@@ -3433,13 +3461,14 @@ function clearShown() {
 
 // The panel's controls. A band select under a preset switches it to Custom
 // (the single-band pick stays Single band); the rest apply as they are.
-$("preset").addEventListener("change", () => { ui.preset = $("preset").value; applySpec(); renderResults(); });
+$("preset").addEventListener("change", () => { ui.preset = $("preset").value; applySpec(); renderResults(); restartScrubForBands(); });
 for (const [i, id] of ["sel-r", "sel-g", "sel-b"].entries()) {
   $(id).addEventListener("change", () => {
     if (PRESETS[ui.preset].kind === "gray") { ui.single = $(id).value; }
     else { ui.rgb[i] = $(id).value; ui.preset = "custom"; }
     applySpec();
     renderResults();
+    restartScrubForBands();
   });
 }
 for (const radio of document.querySelectorAll('input[name="curve"]')) {
@@ -3716,6 +3745,7 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   $("sql").textContent = got.plan;
   cardNodes = new Map();
   scrubPreviews.clear();
+  scrubEntries.clear();
   scrubReady.clear();
   scrubReadyHd.clear();
   paintScrubTrack();
