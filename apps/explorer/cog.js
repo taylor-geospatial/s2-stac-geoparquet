@@ -187,6 +187,84 @@ function levelAtLeast(cog, target) {
     (Math.max(a.width, a.height) >= Math.max(b.width, b.height) ? a : b));
 }
 
+// The coarsest pyramid level whose own resolution is at least as fine as
+// `metersPerPixel`, or the finest level when no level reaches it. A coarser
+// level costs fewer bytes, so the coarsest one that still looks sharp at the
+// given scale is the one to read.
+export function levelForResolution(cog, metersPerPixel) {
+  const levels = [...cog.geotiff.overviews, cog.geotiff];
+  const bbox = cog.geotiff.bbox;
+  const spanMeters = bbox[2] - bbox[0];
+  const mpp = (level) => spanMeters / level.width;
+  let best = null;
+  for (const level of levels) {
+    if (mpp(level) > metersPerPixel) continue;
+    if (!best || mpp(level) > mpp(best)) best = level;
+  }
+  if (best) return best;
+  // Nothing is fine enough: the finest level there is.
+  return levels.reduce((a, b) => (a.width >= b.width ? a : b));
+}
+
+// The tile grid range of `level` that `viewBounds` covers, clamped to the
+// level. Both bound pairs are [west, south, east, north] in degrees. Returns
+// null when the view and the scene do not overlap, because there is then no
+// tile to read.
+export function tileRangeFor(level, cogBounds, viewBounds) {
+  const [west, south, east, north] = cogBounds;
+  const x0 = Math.max(west, viewBounds[0]);
+  const y0 = Math.max(south, viewBounds[1]);
+  const x1 = Math.min(east, viewBounds[2]);
+  const y1 = Math.min(north, viewBounds[3]);
+  if (x1 <= x0 || y1 <= y0) return null;
+  const clamp = (v, hi) => Math.min(Math.max(v, 0), hi);
+  // Row 0 sits at the north edge, so the row fractions invert the latitudes.
+  const fx0 = (x0 - west) / (east - west);
+  const fx1 = (x1 - west) / (east - west);
+  const fy0 = (north - y1) / (north - south);
+  const fy1 = (north - y0) / (north - south);
+  return {
+    minCol: clamp(Math.floor((fx0 * level.width) / level.tileWidth), level.tileCount.x - 1),
+    maxCol: clamp(Math.ceil((fx1 * level.width) / level.tileWidth) - 1, level.tileCount.x - 1),
+    minRow: clamp(Math.floor((fy0 * level.height) / level.tileHeight), level.tileCount.y - 1),
+    maxRow: clamp(Math.ceil((fy1 * level.height) / level.tileHeight) - 1, level.tileCount.y - 1),
+  };
+}
+
+// One view's worth of a COG, in the shape tciOverviewImage returns. Reads
+// only the tiles the view covers, at the coarsest level that still looks
+// sharp there. Null when the view misses the scene.
+export async function windowImage(cog, viewBounds, metersPerPixel, signal) {
+  const level = levelForResolution(cog, metersPerPixel);
+  if (!level) return null;
+  const range = tileRangeFor(level, cog.bounds, viewBounds);
+  if (!range) return null;
+  const { minCol, maxCol, minRow, maxRow } = range;
+  const xy = [];
+  for (let y = minRow; y <= maxRow; y++) for (let x = minCol; x <= maxCol; x++) xy.push([x, y]);
+  const tiles = await level.fetchTiles(xy, { boundless: false, signal });
+  if (tiles.some((t) => t.array.layout === "band-separate")) {
+    throw new Error("band-separate COGs are not supported");
+  }
+  const cols = maxCol - minCol + 1;
+  const rows = maxRow - minRow + 1;
+  const assembled = cols === 1 && rows === 1 ? tiles[0].array : assembleTiles(tiles, {
+    width: cols * level.tileWidth, height: rows * level.tileHeight,
+    tileWidth: level.tileWidth, tileHeight: level.tileHeight,
+    minCol, minRow,
+  });
+  // A TIFF stores an edge tile at full size, so the last column and row of
+  // the grid run past the level. Cut that padding, exactly as readLevel does.
+  const array = crop(assembled,
+    Math.min(cols * level.tileWidth, level.width - minCol * level.tileWidth),
+    Math.min(rows * level.tileHeight, level.height - minRow * level.tileHeight));
+  return {
+    kind: "tci", cog, array,
+    width: array.width, height: array.height,
+    byteLength: array.data.byteLength,
+  };
+}
+
 // One level read whole as a single RasterArray. A coarse Sentinel-2 overview
 // is one or a few tiles, so this is a handful of range requests against a
 // cache the headers already warmed.
