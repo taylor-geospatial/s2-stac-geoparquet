@@ -51,8 +51,6 @@ import {
   indexModule, sclModule, stretchModule, valueScaleFor,
 } from "./raster-modules.js";
 
-const TILE_MIN_ZOOM = 4;
-const TILE_MAX_ZOOM = 15;
 const PREVIEW_MIN = 256;    // the stats overview's long side, at least
 const HD_TARGET = 1200;     // the mid-resolution rung's long side
 
@@ -277,10 +275,18 @@ function singleSourcePipeline(cog, sampler, modules) {
 
 // Props every tile layer shares. The extent clips the tileset to the scene's
 // own footprint, so no tile outside it is ever requested.
-const tileProps = (bounds, events) => ({
+//
+// Set no minZoom and no maxZoom here. Under RasterTileset2D a tile's z is a
+// pyramid level index, not a web-mercator zoom. deck.gl reads the same
+// minZoom on both axes. getTileIndices compares it against the viewport
+// zoom, but Tileset2D._getNearestAncestor compares it against the level
+// index. A floor of 4 therefore stops the ancestor walk at level 4. Every
+// tile at or below that level gets a null parent,
+// getPlaceholderInAncestors finds nothing to draw, and the map shows bare
+// ground through a zoom step. RasterTileset2D already clamps the fine end
+// to descriptor.levels.length - 1, so maxZoom adds nothing.
+export const tileProps = (bounds, events) => ({
   extent: bounds,
-  minZoom: TILE_MIN_ZOOM,
-  maxZoom: TILE_MAX_ZOOM,
   maxRequests: 6,
   refinementStrategy: "no-overlap",
   epsgResolver,
