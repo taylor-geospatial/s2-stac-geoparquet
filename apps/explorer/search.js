@@ -19,8 +19,8 @@
 // hyparquet decodes the chunks; hyparquet-compressors carries the zstd the
 // parts are written with. Both are small pure-JS ESM bundles, pinned like
 // the page's other CDN imports.
-import { parquetMetadata, parquetReadObjects } from "https://cdn.jsdelivr.net/npm/hyparquet@1.31.1/+esm";
-import { compressors } from "https://cdn.jsdelivr.net/npm/hyparquet-compressors@1.1.2/+esm";
+import { parquetMetadata, parquetReadObjects } from "hyparquet";
+import { compressors } from "hyparquet-compressors";
 
 // The columns a search decodes — the card fields plus the filter columns.
 // `assets` (half the bytes of a part) is never among them.

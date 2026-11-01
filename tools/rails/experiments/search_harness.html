@@ -2,6 +2,19 @@
 <meta charset="utf-8">
 <title>C1 search-speed measurement</title>
 <pre id="log">starting…</pre>
+<!-- apps/explorer/search.js names its dependencies as bare specifiers,
+     because the app is bundled (apps/explorer/vite.config.js). This page
+     loads that module straight from the source tree with no bundler, so it
+     resolves the two names itself. The versions are the ones
+     apps/explorer/package.json pins. -->
+<script type="importmap">
+{
+  "imports": {
+    "hyparquet": "https://cdn.jsdelivr.net/npm/hyparquet@1.31.1/+esm",
+    "hyparquet-compressors": "https://cdn.jsdelivr.net/npm/hyparquet-compressors@1.1.2/+esm"
+  }
+}
+</script>
 <script type="module">
 // The measurement page of docs/c1-layout-experiments.md sections A-C
 // (measure_search.py). Same idea as harness.html, one arm wider: a cell names

@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sentinel-2 Explorer — Taylor Geospatial</title>
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <!-- Two faces for the chrome. Space Grotesk takes the headings: the
      Taylor Geospatial sets its own in Gintronic, which is licensed per
      domain, and
@@ -302,11 +301,12 @@
      #imgpanel, so it can sit on top of either and is never clipped by
      their scrolling. -->
 <div id="tip" role="tooltip" hidden></div>
-<!-- deck.gl's own bundle, not a CDN ESM transpile: the esm.sh build of
-     9.4.0 renders but its picking pass returns nothing (see task-20-report),
-     the official dist picks fine. Pinned; a classic script runs before the
-     module below. -->
-<script src="https://cdn.jsdelivr.net/npm/deck.gl@9.4.0/dist.min.js"></script>
+<!-- Vite bundles app.js and everything it imports, deck.gl included. The
+     earlier page loaded deck.gl from its UMD dist because the esm.sh build of
+     9.4.0 rendered but its picking pass returned nothing (see
+     task-20-report); a bundle has neither problem, and it is also the only
+     way to give deck.gl, luma.gl and the raster layers one shared copy of
+     their internals. -->
 <script type="module" src="app.js"></script>
 </body>
 </html>

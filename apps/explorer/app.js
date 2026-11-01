@@ -35,30 +35,29 @@
 // map is MapLibre for the camera; the tiles are drawn by deck.gl
 // interleaved into the same canvas (Task 20), because MapLibre's per-feature
 // state and filter changes re-parse the 33k-polygon tile on every update.
-import maplibregl from "https://esm.sh/maplibre-gl@4.7.1";
-import { PMTiles, Protocol } from "https://esm.sh/pmtiles@3.2.0";
-import { parse } from "https://esm.sh/@loaders.gl/core@4.5.1";
-import { MVTLoader } from "https://esm.sh/@loaders.gl/mvt@4.5.1";
-import { cogTileLayer, previewImage, previewLayer, openScene, sceneCog, loadOverviews,
-  sceneIndexStats, bandPreviewImage, bandTileLayer, tciOverviewImage } from "./cog.js";
+import { GeoJsonLayer } from "@deck.gl/layers";
+import { MVTLayer } from "@deck.gl/geo-layers";
+import { MapboxOverlay } from "@deck.gl/mapbox";
+import { parse } from "@loaders.gl/core";
+import { MVTLoader } from "@loaders.gl/mvt";
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import { PMTiles, Protocol } from "pmtiles";
+import { canSampleUint16, cogTileLayer, destroyTileTextures, destroyLayerTextures, previewImage, previewLayer, openScene, sceneCog,
+  windowImage, bandWindowImage,
+  loadOverviews, sceneIndexStats, bandPreviewImage, bandTileLayer,
+  tciOverviewImage } from "./cog.js";
 import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSES, PRESETS,
   bandsOf, HIST_BINS } from "./bands.js";
 import { dayRange, valueRange } from "./rangeslider.js";
 import { sceneRows, warmPart, readTable, keyedRows, fmtSecs } from "./search.js";
-import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered,
-  trimToBudget } from "./results.js";
-// deck.gl comes from its pinned dist bundle (index.html), not an ESM CDN
-// transpile: the esm.sh build draws but cannot pick. One bundle, one luma.gl.
-// A classic script that failed to load is a missing global, not an import
-// error, so it is checked here and said out loud rather than thrown.
-if (!window.deck?.MapboxOverlay) {
-  const el = document.getElementById("status");
-  el.textContent = "deck.gl did not load (cdn.jsdelivr.net/npm/deck.gl@9.4.0/dist.min.js is "
-    + "blocked or unreachable) — the map cannot be drawn. Reload once the CDN is reachable.";
-  el.classList.add("error");
-  throw new Error("deck.gl bundle missing");
-}
-const { MapboxOverlay, GeoJsonLayer, MVTLayer } = window.deck;
+import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
+import { viewKeyOf, viewChangedEnough, WarmBudget, rungFor, toneOf, staleRungs } from "./warm.js";
+// deck.gl, luma.gl and @developmentseed/deck.gl-geotiff are bundled into this
+// module by Vite, so there is one copy of each. The raster layers build
+// luma.gl textures and hand them to the shader pipeline this page's own Deck
+// instance runs, and a second copy of @luma.gl/core gives two class
+// identities and textures that do not bind. See vite.config.js.
 
 // The published catalog, through its two doors. The gateway serves a named
 // file over HTTP range requests, which is what this page reads. The bucket
@@ -683,7 +682,16 @@ let lookup = new Map();
 let paintKey = 0;
 let hovered = null;          // the hovered feature (GeoJSON, WGS84) or null
 let cogLayer = null;         // the shown scene's TileLayer, or null
-let cogPreview = null;       // its thumbnail warp, beneath the tiles until they load
+// Replace the shown tile layer and free what the old one held. deck.gl
+// clears a tileset's cache on finalize without unloading its tiles, so a
+// layer that goes out under a new id takes its whole resident set of GPU
+// textures with it unless they are freed here. A rebuild under the same id
+// is a restyle: deck.gl keeps the tiles, so nothing is freed.
+function setCogLayer(next) {
+  if (cogLayer && cogLayer.id !== next?.id) destroyLayerTextures(cogLayer.id);
+  cogLayer = next;
+}
+let cogPreview = null;       // its thumbnail rung, beneath the tiles until they load
 let scrubLayer = null;       // the scrub bar's live thumbnail preview, or null
 
 // The one state object. Every mutator writes here and calls scheduleApply;
@@ -2506,18 +2514,19 @@ Object.defineProperties(window.S2, { shown: { get: () => shown }, ui: { value: u
 
 // The scenes a step away from the one on the map. Stepping back and forth
 // over two dates is how a reader compares them, and every step used to re-read
-// the COG headers, the thumbnail and every tile: the map fell back to the
-// blurred preview each time. A scene holds its opened COGs, its overviews and
-// its warped tiles (cog.js), so holding the scene holds all of it, and a step
-// back draws from memory.
+// the COG headers, the thumbnail and every overview. A scene holds all three
+// (cog.js), so holding the scene holds them, and a step back skips the reads.
 //
 // Eight scenes, so a reader can walk a week of dates forward and still step
-// back over all of them. The count is cheap on its own: a scene's COGs,
-// overviews and thumbnail are small. The tiles are what cost, so they are
-// bounded across all warm scenes together rather than per scene. One scene at
-// a viewport measured 54 tiles, so the budget holds about seven such views.
+// back over all of them. The count is cheap: a scene's COGs, overviews and
+// thumbnail are small.
+//
+// The tiles are not held. The old CPU reader kept a warped tile per scene in
+// a Map, and a tile budget bounded those Maps across the warm scenes. This
+// reader gives the tiles to COGLayer, which frees its textures when the layer
+// leaves the map. A step back therefore reads the tiles again. Issue: port
+// the tile persistence to the new reader.
 const WARM_SCENES = 8;
-const TILE_BUDGET = 400;     // warped TCI tiles over all warm scenes, ~100 MB
 const warmed = new Map();
 const warmScene = (id) => warmed.get(id);
 function keepWarm(me) {
@@ -2525,22 +2534,21 @@ function keepWarm(me) {
   warmed.delete(me.id);
   warmed.set(me.id, { scene: me.scene, bitmapP: me.bitmapP });
   if (warmed.size > WARM_SCENES) warmed.delete(warmed.keys().next().value);
-  trimWarmTiles();
 }
-// Give up the least recent scene's tiles first. The scene on the map went in
-// last, so it is the last to lose anything. trimToBudget (results.js) holds
-// the arithmetic, where node --test can reach it.
-const trimWarmTiles = () =>
-  trimToBudget([...warmed.values()].map((w) => w.scene.tiles), TILE_BUDGET);
 
 // The preview comes off once the tile layer has every tile of the resting
 // viewport. onViewportLoad fires mid-flight too (each coarse view the camera
-// passes through loads), so while the map moves this waits for its moveend
-// and asks the layer itself. A later pan re-fires onViewportLoad; once
-// settled there is nothing left to do.
+// passes through loads), so while the map moves this waits for its moveend.
+// What it then reads is `shown.tilesLoaded`, which the layer's own
+// onViewportLoad event set (eventsFor). The module-level `cogLayer` cannot
+// answer this: render() hands deck a CLONE of it (underLabels), so the
+// instance held here never enters deck and its isLoaded is false forever —
+// reading it left the bar on "loading full resolution…" for good whenever
+// the tiles landed during the commit's fitBounds flight, which they now
+// always do.
 function tilesSettled() {
   if (!shown || shown.settled || shown.failed || !cogLayer) return;
-  if (map.isMoving() || !cogLayer.isLoaded) return;
+  if (map.isMoving() || !shown.tilesLoaded) return;
   shown.settled = true;
   cogPreview = null;
   scrubLayer = null;
@@ -2556,6 +2564,37 @@ function tilesSettled() {
     + "No tile server, no API.");
 }
 map.on("moveend", tilesSettled);
+// A move that crosses the pan threshold, or any zoom step, starts a new
+// view generation. The sharp rungs of the old one stay in memory under the
+// budget, because returning to that exact view makes them good again, but
+// the track stops counting them and the queue reads the new view.
+map.on("moveend", () => {
+  if (!refreshWarmView()) return;
+  retireSharpRungs();
+});
+// Put every rung the live view or band set retired back on its soft rung,
+// then read the new generation. Both halves matter. Without the downgrade
+// the queue skips each id it already sharpened, so nothing re-sharpens,
+// and entry.img still holds the retired read, so the scrub paints the old
+// window or the old colours.
+let lastQueueKey = "";
+function retireSharpRungs() {
+  const specKey = liveSpecKey();
+  const key = `${warmViewKey}|${specKey}`;
+  // Idempotent, so every path that can change the view or the spec may
+  // call it. Only a real generation change does work.
+  if (key === lastQueueKey) return;
+  lastQueueKey = key;
+  for (const id of staleRungs(scrubEntries, warmViewKey, specKey)) {
+    downgradeScrubHd(id);
+  }
+  paintScrubTrack();
+  prefetchScrubStack();
+}
+// A band change and a restyle retire the sharp rungs the same way a view
+// change does, because the rung freezes the band set and the stretch at
+// read time.
+const restartScrubForBands = retireSharpRungs;
 
 // The image nav strip's zoom-to: re-frame the shown scene's footprint.
 // A separate listener from tilesSettled — this one only reads the camera,
@@ -2650,7 +2689,7 @@ function setTip(el, text) {
 }
 
 // The thumbnail bitmap alone, decoded once per scene id and cached: the
-// warp builder below needs it, and so does the neighbour prefetch.
+// preview builder below needs it, and so does the neighbour prefetch.
 const thumbBitmaps = new Map();
 const THUMB_BITMAPS_MAX = 40;
 function thumbBitmapFor(row) {
@@ -2663,14 +2702,14 @@ function thumbBitmapFor(row) {
   return thumbBitmaps.get(row.id);
 }
 
-// The scrub preview is the same warped image the committed scene shows
-// (cog.js's previewImage, over the scene's UTM grid via previewLayer): a
-// partial granule registers exactly instead of stretching flat over the
-// full footprint square, and nodata is masked the same way. The map below
-// caches the warp per scene id, so the cost — one ~64 KiB TCI header read —
-// falls once per scene the user pauses on, not once per drag frame.
+// The scrub preview is the same image the committed scene shows (cog.js's
+// previewImage, reprojected over the scene's UTM grid by previewLayer): a
+// partial granule registers exactly instead of stretching flat over the full
+// footprint square, and nodata is keyed out the same way. The map below caches
+// the preview per scene id, so the cost — one ~64 KiB TCI header read — falls
+// once per scene the user pauses on, not once per drag frame.
 // An entry is {img, cog, thumb, hd}: `img` is what goes on the map and `hd`
-// says which rung it is on. The thumbnail warp is kept as `thumb` even after
+// says which rung it is on. The thumbnail rung is kept as `thumb` even after
 // the upgrade below replaces `img`, so a downgrade costs nothing — it is the
 // same object the entry was born with, not a second copy.
 const scrubPreviews = new Map();
@@ -2681,9 +2720,12 @@ const scrubPreviews = new Map();
 const scrubReady = new Set();
 // The subset whose `img` is the mid-resolution overview (Task 25). A member
 // is always a scrubReady member too: nothing is upgraded before its
-// thumbnail warp exists. Insertion-ordered, which is what the HD cap below
+// thumbnail rung exists. Insertion-ordered, which is what the HD cap below
 // evicts by.
 const scrubReadyHd = new Set();
+// The settled entries, by id. scrubPreviews holds promises, and the track
+// paints on a frame, so it needs the entry without an await.
+const scrubEntries = new Map();
 const SCRUB_PREVIEWS_MAX = 120;
 function scrubPreviewFor(row) {
   const id = String(row.id);
@@ -2693,11 +2735,31 @@ function scrubPreviewFor(row) {
         const scene = openScene(id, sceneDirOf(row));
         const cog = await sceneCog(scene, "TCI");
         const bitmap = await thumbBitmapFor(row);
-        if (!bitmap) return null;
+        if (!bitmap) {
+          // No thumbnail at all. The COG is already open, so read its
+          // coarsest rung instead. Without this the scrub leaves the
+          // previous date on the map and the reader reads a wrong date as
+          // the right one.
+          const fallback = await tciOverviewImage(cog).catch(() => null);
+          if (!fallback) return null;
+          scrubReady.add(id);
+          const bare = { img: fallback, cog, scene, thumb: fallback, hd: false,
+            overview: fallback, viewKey: null, specKey: null };
+          scrubEntries.set(id, bare);
+          return bare;
+        }
         const white = /\/thumbnail\.jpg$/i.test(new URL(row.thumbnail_url).pathname);
-        const img = previewImage(cog, bitmap, { white });
-        if (img) scrubReady.add(id);
-        return img ? { img, cog, thumb: img, hd: false } : null;
+        // A thumbnail whose aspect does not match the COG used to give no
+        // entry at all, so the scrub showed nothing on that date. The soft
+        // rung's job is to say the scrub moved, so take it loose instead.
+        const img = previewImage(cog, bitmap, { white })
+          ?? previewImage(cog, bitmap, { white, loose: true });
+        if (!img) return null;
+        scrubReady.add(id);
+        const entry = { img, cog, scene, thumb: img, hd: false,
+          viewKey: null, specKey: null };
+        scrubEntries.set(id, entry);
+        return entry;
       } catch {
         // A missing/odd thumbnail_url (sceneDirOf) or a failed header read
         // (sceneCog) resolves to null rather than rejecting, so an awaiter
@@ -2709,8 +2771,11 @@ function scrubPreviewFor(row) {
     if (scrubPreviews.size > SCRUB_PREVIEWS_MAX) {
       const evicted = scrubPreviews.keys().next().value;
       scrubPreviews.delete(evicted);
+      scrubEntries.delete(evicted);
       scrubReady.delete(evicted);
       scrubReadyHd.delete(evicted);
+      warmBudget.delete(evicted);
+      overviewBudget.delete(evicted);
     }
   }
   return scrubPreviews.get(id);
@@ -2748,15 +2813,19 @@ function paintScrubTrack() {
     if (!view.length) { scrub.style.setProperty("--scrub-fill", "none"); return; }
     const len = view.length;
     // Three states per index, not two (Task 25): 0 nothing yet, 1 the
-    // thumbnail warp is ready, 2 the mid-resolution overview is. The HD set
+    // thumbnail rung is ready, 2 the mid-resolution overview is. The HD set
     // is checked first because it is a subset of scrubReady. Runs merge on
     // equal state exactly as they did on equal loadedness, so the span
     // formula and the shared hard stops are untouched — only the number of
     // distinct colours a run can take changed.
-    const state = view.map((r) => {
-      const id = String(r.id);
-      return scrubReadyHd.has(id) ? 2 : scrubReady.has(id) ? 1 : 0;
-    });
+    // Tone 1 does not depend on the view, so a zoom leaves it standing.
+    // Tone 2 does: toneOf demotes a rung read for another generation or
+    // another band set, which is what makes a zoom clear the sharp track
+    // without touching the soft one.
+    const viewKey = warmViewKey;
+    const specKey = liveSpecKey();
+    const state = view.map((r) =>
+      toneOf(scrubEntries.get(String(r.id)), viewKey, specKey));
     const tone = ["transparent", "var(--scrub-loaded)", "var(--scrub-hd)"];
     const stops = [];
     for (let start = 0; start < len;) {
@@ -2815,24 +2884,132 @@ async function prefetchScrubStack() {
 // prefetchSeq — a new search or view-key change abandons this queue within
 // one await exactly as it does the thumbnail pass.
 //
-// The cap is on resident HD images, not on reads: `order` is outward from the
-// shown position, so the first SCRUB_HD_MAX rows of it are the nearest ones,
-// and capScrubHd below prunes what earlier queues (a different position, a
-// different filter) left behind. A ~1372 x 1372 RGBA image is ~7.5 MB, so 20
-// of them is ~150 MB worst case — the same order as the COG plane cache's
-// ~100 MB, and on top of the thumbnail warps the 120-entry cache already
-// holds (~4 MB each at 1024 px, and a downgrade hands one of those back).
+// The cap is on resident HD reads, not on reads issued: `order` is outward
+// from the shown position, so the first SCRUB_HD_MAX rows of it are the
+// nearest ones, and capScrubHd below prunes what earlier queues (a different
+// position, a different filter) left behind. A rung now holds the overview's
+// own samples, not an RGBA warp of them: a 1372 x 1372 TCI level is ~5.6 MB
+// of uint8, so 20 of them is ~110 MB worst case. The thumbnail rung costs
+// almost nothing, because it keeps the ImageBitmap the results grid already
+// decoded instead of a warped copy of it.
 const SCRUB_HD_MAX = 20;
+// The warmed reads live in host memory, not on the GPU. A windowed read is
+// smaller than a whole-scene overview, but twenty of them still add up, so
+// the budget counts bytes and the oldest goes first.
+const WARM_BYTES = 192 * 1024 * 1024;
+const warmBudget = new WarmBudget(WARM_BYTES);
+// The idle whole-scene rung is host memory too, and it outlives a view
+// generation, so it needs its own bound. One overview is about 5.6 MB.
+const OVERVIEW_BYTES = 96 * 1024 * 1024;
+const overviewBudget = new WarmBudget(OVERVIEW_BYTES);
+// The view generation every sharp rung belongs to. A rung read for another
+// generation shows another place, so rungFor refuses it.
+let warmView = null;
+let warmViewKey = "";
+const viewStateNow = () => {
+  const mb = map.getBounds();
+  return { zoom: map.getZoom(),
+    bounds: [mb.getWest(), mb.getSouth(), mb.getEast(), mb.getNorth()] };
+};
+// Web mercator metres per pixel at the view centre. This is the scale the
+// windowed read picks its pyramid level against.
+const viewMetersPerPixel = () => {
+  const lat = (map.getCenter().lat * Math.PI) / 180;
+  return (156543.03392 * Math.cos(lat)) / 2 ** map.getZoom();
+};
+// Start a new generation when the view has moved far enough. Returns true
+// when it did, which is the caller's signal to retire the sharp rungs.
+function refreshWarmView(force = false) {
+  const next = viewStateNow();
+  if (!force && !viewChangedEnough(warmView, next)) return false;
+  warmView = next;
+  warmViewKey = viewKeyOf(next);
+  return true;
+}
+// The key a sharp rung is stamped with. It carries the band set and the
+// stretch, because the read bakes both into the image: a rung read before
+// a gamma change paints the old stretch under a map that shows the new one.
+const liveSpecKey = () => {
+  const spec = bandSpec(shown);
+  return `${spec.bands.join("+")}|${styleKeyOf(spec)}`;
+};
 // The entry whose `img` the current scrubLayer was built from, or null. Only
 // ever read together with `scrubLayer`, which every clear path nulls — so a
 // stale value here cannot make the upgrade below put a layer back on a map
 // that has moved on.
 let scrubShown = null;
 async function upgradeScrubStack(order, seq) {
+  // Fix the generation this whole pass reads for. Every rung it writes
+  // carries this key, and a later move retires them together.
+  if (!warmView) refreshWarmView(true);
   for (let n = 0; n < order.length && n < SCRUB_HD_MAX; n++) {
     if (seq !== prefetchSeq) return;
+    // A committed scene owns the connection pool until it settles: these
+    // reads share the COG host with the committed scene's tiles, and a
+    // 20-scene stack of overview reads in front of them is what made a
+    // commit sit on its blurry preview for the length of the whole queue.
+    // The wait is bounded so a load that neither settles nor fails (a tile
+    // stuck in a proxy, say) cannot park the queue forever.
+    const waitUntil = Date.now() + 30000;
+    while (shown && !shown.settled && !shown.failed && Date.now() < waitUntil) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (seq !== prefetchSeq) return;
+    }
     await upgradeScrubPreview(order[n], seq);
   }
+  if (seq !== prefetchSeq) return;
+  await fillScrubOverviews(order, seq);
+}
+
+// The idle rung. The windowed pass above is what the reader is waiting for,
+// so this runs only after it finishes. It reads the whole-scene overview
+// and promotes it over the thumbnail, which gives a better soft image on
+// the next zoom. It never displaces a sharp rung.
+async function fillScrubOverviews(order, seq) {
+  for (let n = 0; n < order.length && n < SCRUB_HD_MAX; n++) {
+    if (seq !== prefetchSeq) return;
+    // A committed scene owns the connection pool until it settles, the
+    // same rule the windowed pass above follows.
+    const waitUntil = Date.now() + 30000;
+    while (shown && !shown.settled && !shown.failed && Date.now() < waitUntil) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (seq !== prefetchSeq) return;
+    }
+    const row = order[n];
+    const id = String(row.id);
+    const p = scrubPreviewFor(row);
+    const entry = await p.catch(() => null);
+    if (seq !== prefetchSeq) return;
+    if (!entry || entry.overview) continue;
+    let img = null;
+    try {
+      img = await tciOverviewImage(entry.cog);
+    } catch {
+      continue;
+    }
+    if (seq !== prefetchSeq) return;
+    if (!img || scrubPreviews.get(id) !== p) continue;
+    entry.overview = img;
+    overviewBudget.add(id, img.byteLength);
+    for (const dropped of overviewBudget.evictTo()) dropOverview(dropped);
+    // The soft rung only. A sharp rung for the live view outranks it.
+    // `thumb` is left alone: it is the rung a downgrade falls back to, and
+    // overwriting it made the overview impossible to release.
+    if (!entry.hd) {
+      entry.img = img;
+      paintScrubTrack();
+    }
+  }
+}
+
+// Release one scene's whole-scene overview and fall back to its thumbnail.
+function dropOverview(id) {
+  overviewBudget.delete(id);
+  scrubPreviews.get(id)?.then((entry) => {
+    if (!entry || !entry.overview) return;
+    if (entry.img === entry.overview) entry.img = entry.thumb;
+    entry.overview = null;
+  }).catch(() => null);
 }
 
 async function upgradeScrubPreview(row, seq) {
@@ -2840,26 +3017,41 @@ async function upgradeScrubPreview(row, seq) {
   if (scrubReadyHd.has(id)) return;
   const p = scrubPreviewFor(row);
   const entry = await p.catch(() => null);
-  if (seq !== prefetchSeq || !entry || entry.hd) return;
+  if (seq !== prefetchSeq || !entry) return;
+  // The keys are read before the await and compared again after it. A read
+  // that lands after a zoom or a preset change is a picture of another
+  // place, or of this place in the wrong colours, so it is dropped.
+  const viewKey = warmViewKey;
+  const specKey = liveSpecKey();
+  if (rungFor(entry, viewKey, specKey) === "sharp") return;
   let img = null;
   try {
-    img = await tciOverviewImage(entry.cog);
+    const spec = bandSpec(shown);
+    const mpp = viewMetersPerPixel();
+    img = specKey === "TCI"
+      ? await windowImage(entry.cog, warmView.bounds, mpp)
+      : await bandWindowImage(entry.scene, spec, warmView.bounds, mpp);
   } catch {
-    // A range read that fails leaves the thumbnail rung in place: the track
+    // A range read that fails leaves the soft rung in place: the track
     // keeps the subdued tone for this position and nothing retries it.
     return;
   }
   if (seq !== prefetchSeq || !img) return;
+  if (viewKey !== warmViewKey || specKey !== liveSpecKey()) return;
   // The entry may have been evicted (and perhaps rebuilt) under the read:
   // only the live promise's own entry may be swapped, or the HD set would
   // claim an id whose cache entry no longer exists.
   if (scrubPreviews.get(id) !== p) return;
   entry.img = img;
   entry.hd = true;
+  entry.viewKey = viewKey;
+  entry.specKey = specKey;
   scrubReadyHd.add(id);
+  warmBudget.add(id, img.byteLength);
+  for (const dropped of warmBudget.evictTo()) downgradeScrubHd(dropped);
   capScrubHd();
   paintScrubTrack();
-  // If this scene's thumbnail warp is what the map is showing right now — a
+  // If this scene's thumbnail rung is what the map is showing right now — a
   // drag preview, or the bridge a commit left up — rebuild the layer under
   // the same id so deck.gl swaps the bitmap in place instead of adding a
   // second layer. The two conditions are read here, after every await, not
@@ -2873,29 +3065,37 @@ async function upgradeScrubPreview(row, seq) {
   }
 }
 
-// Downgrade-evict the oldest HD images over the cap: back to the thumbnail
-// warp the entry kept, or — if the entry is gone from the cache entirely —
+// Downgrade-evict the oldest HD reads over the cap: back to the thumbnail
+// rung the entry kept, or — if the entry is gone from the cache entirely —
 // just out of the set. A deck.gl layer already built from an evicted HD
 // image holds its own reference, so a downgrade never blanks or coarsens
 // what is on the map; it only stops the cache from handing that image out
 // again.
 function capScrubHd() {
   while (scrubReadyHd.size > SCRUB_HD_MAX) {
-    const oldest = scrubReadyHd.values().next().value;
-    scrubReadyHd.delete(oldest);
-    const p = scrubPreviews.get(oldest);
-    if (!p) continue;
-    // The cache holds promises, and this one settled long before its id could
-    // enter scrubReadyHd — so the entry arrives on the very next microtask,
-    // not after any I/O. The set membership is re-read there all the same: a
-    // fresh upgrade of this same id in between must win over the downgrade.
-    p.then((entry) => {
-      if (!entry || !entry.hd || scrubReadyHd.has(oldest)) return;
-      entry.img = entry.thumb;
-      entry.hd = false;
-      paintScrubTrack();
-    }).catch(() => null);
+    downgradeScrubHd(scrubReadyHd.values().next().value);
   }
+}
+
+// Put one id back on its soft rung. Both caps call this: the count cap
+// above and the byte budget in the upgrade.
+function downgradeScrubHd(id) {
+  scrubReadyHd.delete(id);
+  warmBudget.delete(id);
+  const p = scrubPreviews.get(id);
+  if (!p) return;
+  // The cache holds promises, and this one settled long before its id could
+  // enter scrubReadyHd — so the entry arrives on the very next microtask,
+  // not after any I/O. The set membership is re-read there all the same: a
+  // fresh upgrade of this same id in between must win over the downgrade.
+  p.then((entry) => {
+    if (!entry || !entry.hd || scrubReadyHd.has(id)) return;
+    entry.img = entry.overview ?? entry.thumb;
+    entry.hd = false;
+    entry.viewKey = null;
+    entry.specKey = null;
+    paintScrubTrack();
+  }).catch(() => null);
 }
 
 let scrubSeq = 0;
@@ -2911,8 +3111,8 @@ async function previewIndex(i) {
   const p = await scrubPreviewFor(row);
   if (seq !== scrubSeq) return;
   // A null build (no thumbnail, a CORS failure, a COG open failure) leaves
-  // whatever the scrub layer already shows — never a raw, unwarped bitmap;
-  // that mismatch is the jitter this warp exists to remove.
+  // whatever the scrub layer already shows — never a raw, unreprojected
+  // bitmap; that mismatch is the jitter this reprojection exists to remove.
   if (p) {
     // p.img is whichever rung this entry has reached — the thumbnail warp, or
     // the mid-resolution overview if the upgrade queue has already got here.
@@ -3082,7 +3282,7 @@ async function applySpec(me = shown) {
   } catch (err) {
     if (stale(me, serial)) return;
     shown = null;
-    cogLayer = null; cogPreview = null; render();
+    setCogLayer(null); cogPreview = null; render();
     hideImagePanel();
     say(`Could not show ${me.id} — ${err.message}`, true);
   }
@@ -3101,9 +3301,10 @@ function scheduleRestyle() {
 async function showBands(me, spec, serial) {
   const { id } = me;
   me.bandsKey = spec.bands.join("+"); me.spec = spec;
-  me.settled = false; me.failed = false;
+  retireSharpRungs();
+  me.settled = false; me.failed = false; me.tilesLoaded = false;
   me.loading = true;
-  cogLayer = null; cogPreview = null; render();
+  setCogLayer(null); cogPreview = null; render();
   syncPanel(spec, me);
   // The old channel blocks go now: a handle dragged during the load would
   // write into ranges the new blocks are about to be built from.
@@ -3138,7 +3339,7 @@ async function showBandsLoaded(me, spec, serial, failed) {
   spec = me.spec = bandSpec(me);
   syncPanel(spec, me);
   buildChannels(me, spec);
-  cogLayer = bandTileLayer(me.scene, spec, styleKeyOf(spec), `cog-${id}-${me.bandsKey}`, me.eventsFor(me.bandsKey));
+  setCogLayer(bandTileLayer(me.scene, spec, styleKeyOf(spec), `cog-${id}-${me.bandsKey}`, me.eventsFor(me.bandsKey)));
   // The real bands are on the map now; the flat scrub thumbnail that
   // bridged the release has done its job.
   scrubLayer = null;
@@ -3156,17 +3357,30 @@ async function showBandsLoaded(me, spec, serial, failed) {
   if (me.missing.length) {
     say(`${me.missing.join(", ")} of ${id} could not be opened (${failed[0][1].message}) — `
       + `showing ${spec.label} without ${me.missing.length > 1 ? "them" : "it"}.`, true);
+  } else if (uint16Unsupported(me, spec)) {
+    // Say it, because the alternative is a black image and no reason given.
+    say(`This browser's renderer cannot sample 16-bit textures `
+      + `(no EXT_texture_norm16), so ${spec.label} comes out black. True colour `
+      + `(TCI) and SCL classes are 8-bit and still work.`, true);
   }
   tilesSettled();
 }
 
-// Only the stretch changed: the same tiles repainted from their cached
-// planes (a new layer instance with the same id and a new style key), and
-// the preview repainted if it is still under them.
+// True when the spec needs a 16-bit band and the renderer cannot sample one
+// (cog.js's canSampleUint16). Every reflectance band is uint16; SCL is uint8.
+function uint16Unsupported(me, spec) {
+  if (canSampleUint16()) return false;
+  return spec.bands.some((band) => (me.scene.overviews.get(band)?.value?.cog?.bits ?? 8) > 8);
+}
+
+// Only the stretch changed. The stretch is shader uniforms now, so this costs
+// no reads and no repaint of a tile: a new layer instance under the same id
+// carries the new min, max, curve, gamma and nodata to the GPU, and the
+// preview under the tiles gets the same treatment.
 function restyle(me, spec) {
   me.spec = spec;
   syncPanel(spec, me);
-  if (cogLayer) cogLayer = bandTileLayer(me.scene, spec, styleKeyOf(spec), cogLayer.id, me.eventsFor(me.bandsKey));
+  if (cogLayer) setCogLayer(bandTileLayer(me.scene, spec, styleKeyOf(spec), cogLayer.id, me.eventsFor(me.bandsKey)));
   if (cogPreview) {
     const img = bandPreviewImage(me.scene, spec);
     cogPreview = img ? previewLayer(img, me.scene, cogPreview.id) : null;
@@ -3181,20 +3395,20 @@ function restyle(me, spec) {
 async function showTci(me, spec, serial) {
   const { id, r } = me;
   me.bandsKey = "TCI"; me.missing = [];
-  me.settled = false; me.failed = false;
-  cogLayer = null; cogPreview = null; render();
+  me.settled = false; me.failed = false; me.tilesLoaded = false;
+  setCogLayer(null); cogPreview = null; render();
   cogbar(id, "loading", "Loading preview…");
   say(`Preview of ${id} (True color) — loading full-resolution tiles…`);
   me.bitmapP ??= thumbnailBitmap(r.thumbnail_url);
-  // Does this scene still hold the tiles it drew last time? Read it before
-  // the layer exists, because the layer starts refilling the cache at once.
-  // A step holds the camera, so those tiles are the ones this view needs, and
-  // a blurred thumbnail under them would only flash. me.settled cannot answer
-  // this: the layer does not report itself loaded at every zoom.
-  const warmTiles = me.scene.tiles.size > 0;
+  // A warm scene holds its opened COGs, its overviews and its thumbnail, so a
+  // step back skips those reads. It does not hold tiles: COGLayer owns its
+  // textures and frees them when the layer leaves the map. The preview
+  // therefore always shows, and a step back reads the tiles again. See the
+  // warm pool above.
+  const warmTiles = false;
   const cog = await sceneCog(me.scene, "TCI");
   if (stale(me, serial)) return;
-  cogLayer = cogTileLayer(cog, `cog-${id}-TCI`, me.eventsFor("TCI"), me.scene.tiles);
+  setCogLayer(cogTileLayer(cog, `cog-${id}-TCI`, me.eventsFor("TCI")));
   // The real tiles are registered; the flat scrub thumbnail that bridged
   // the release has done its job.
   scrubLayer = null;
@@ -3240,7 +3454,8 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   const prev = shown?.id === id ? shown : null;
   const warm = prev ?? warmScene(id);
   const me = shown = { id, r, t0: performance.now(), serial: 0, bandsKey: null, spec: null,
-    settled: false, failed: false, missing: [], ranges: prev?.ranges ?? new Map(),
+    settled: false, failed: false, tilesLoaded: false, missing: [],
+    ranges: prev?.ranges ?? new Map(),
     offset: offsetOf(r), scene: warm?.scene ?? null, bitmapP: warm?.bitmapP ?? null,
     loading: false, eventsFor: null };
   const bbox = bboxOf(r);
@@ -3248,7 +3463,7 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   if (button) button.disabled = true;
   // A scene already on the map comes off now, not when this one is ready:
   // the bar names this scene from here on and the map must not contradict it.
-  if (cogLayer || cogPreview) { cogLayer = null; cogPreview = null; render(); }
+  if (cogLayer || cogPreview) { setCogLayer(null); cogPreview = null; render(); }
   cogbar(id, "loading", "Loading preview…");
   // The user asked to see an image: on a phone the sheet drops to peek, so
   // the map, and the scene now being drawn on it, is what fills the screen.
@@ -3266,8 +3481,12 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
       say(`A full-resolution tile of ${id} failed to load — ${err?.message ?? err}. `
         + "The preview stays under the tiles that did.", true);
     },
+    // COGLayer gives the texture duty back to whoever supplies getTileData,
+    // and cog.js supplies one. Without this every evicted tile leaks.
+    onTileUnload: (tile) => destroyTileTextures(tile.content),
     onViewportLoad: () => {
       if (me !== shown || key !== me.bandsKey) return;
+      me.tilesLoaded = true;
       debug(`[cog] ${id} ${key} viewport loaded at ${(performance.now() - me.t0).toFixed(0)} ms`);
       tilesSettled();
     },
@@ -3282,7 +3501,7 @@ async function showOnMap(r, button, preset = "tci", band = null, fly = true) {
   } catch (err) {
     if (me !== shown) return;
     shown = null;
-    cogLayer = null; cogPreview = null; render();
+    setCogLayer(null); cogPreview = null; render();
     hideImagePanel();
     say(`Could not show ${id} — ${err.message}`, true);
   } finally {
@@ -3297,7 +3516,7 @@ $("cog-clear").addEventListener("click", clearShown);
 function clearShown() {
   shown = null;
   S.displayedId = null;
-  cogLayer = null;
+  setCogLayer(null);
   cogPreview = null;
   render();
   hideImagePanel();
@@ -3310,13 +3529,14 @@ function clearShown() {
 
 // The panel's controls. A band select under a preset switches it to Custom
 // (the single-band pick stays Single band); the rest apply as they are.
-$("preset").addEventListener("change", () => { ui.preset = $("preset").value; applySpec(); renderResults(); });
+$("preset").addEventListener("change", () => { ui.preset = $("preset").value; applySpec(); renderResults(); restartScrubForBands(); });
 for (const [i, id] of ["sel-r", "sel-g", "sel-b"].entries()) {
   $(id).addEventListener("change", () => {
     if (PRESETS[ui.preset].kind === "gray") { ui.single = $(id).value; }
     else { ui.rgb[i] = $(id).value; ui.preset = "custom"; }
     applySpec();
     renderResults();
+    restartScrubForBands();
   });
 }
 for (const radio of document.querySelectorAll('input[name="curve"]')) {
@@ -3593,6 +3813,7 @@ async function startSearch(tile, year, { flyFirst = true } = {}) {
   $("sql").textContent = got.plan;
   cardNodes = new Map();
   scrubPreviews.clear();
+  scrubEntries.clear();
   scrubReady.clear();
   scrubReadyHd.clear();
   paintScrubTrack();
