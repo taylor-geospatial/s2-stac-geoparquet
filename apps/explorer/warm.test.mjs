@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { viewKeyOf, viewChangedEnough, WarmBudget } from "./warm.js";
+import { viewKeyOf, viewChangedEnough, WarmBudget, rungFor, toneOf } from "./warm.js";
 
 const view = (zoom, w, s, e, n) => ({ zoom, bounds: [w, s, e, n] });
 
@@ -27,4 +27,33 @@ test("the budget evicts oldest first and reports what it dropped", () => {
   assert.deepEqual(b.evictTo(100), ["a"]);
   assert.equal(b.has("a"), false);
   assert.equal(b.bytes, 60);
+});
+
+test("a rung from another view is not sharp for this one", () => {
+  assert.equal(rungFor({ hd: true, viewKey: "a", specKey: "TCI" },
+    "b", "TCI"), "soft");
+  assert.equal(rungFor({ hd: true, viewKey: "b", specKey: "TCI" },
+    "b", "TCI"), "sharp");
+});
+
+test("a rung from another band set is not sharp", () => {
+  assert.equal(rungFor({ hd: true, viewKey: "b", specKey: "TCI" },
+    "b", "B08+B04"), "soft");
+});
+
+test("an entry with no sharp read is soft", () => {
+  assert.equal(rungFor({ hd: false }, "b", "TCI"), "soft");
+});
+
+test("a scene with no usable thumbnail still reports a soft rung", () => {
+  // previewImage returned null, so the entry carries only the raw bitmap.
+  assert.equal(toneOf({ hd: false, thumb: { raw: true } }, "v1", "TCI"), 1);
+  assert.notEqual(toneOf({ hd: false, thumb: { raw: true } }, "v1", "TCI"), 0);
+});
+
+test("tone 1 survives a view change and tone 2 does not", () => {
+  const e = { hd: true, thumb: {}, viewKey: "v1", specKey: "TCI" };
+  assert.equal(toneOf(e, "v2", "TCI"), 1);
+  assert.equal(toneOf(e, "v1", "TCI"), 2);
+  assert.equal(toneOf(null, "v1", "TCI"), 0);
 });

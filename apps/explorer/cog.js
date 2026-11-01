@@ -510,8 +510,14 @@ class SingleBandLayer extends CompositeLayer {
 // One scale serves both axes, so the thumbnail must have the COG's shape; a
 // thumbnail cut to another shape would be stretched into the wrong place.
 // More than a pixel off: no preview.
-export function previewImage(cog, bitmap, { white = false } = {}) {
-  if (Math.abs(bitmap.width * cog.h - bitmap.height * cog.w) > bitmap.width) return null;
+// `loose` skips the aspect check. Only the scrub's soft rung sets it. A
+// thumbnail whose aspect does not match the COG registers a little wrong
+// over the footprint, which is worse than exact but better than nothing:
+// the reader must see that the scrub moved. A sharp read replaces it.
+export function previewImage(cog, bitmap, { white = false, loose = false } = {}) {
+  if (!loose && Math.abs(bitmap.width * cog.h - bitmap.height * cog.w) > bitmap.width) {
+    return null;
+  }
   return {
     kind: "jpeg", cog, bitmap,
     width: bitmap.width, height: bitmap.height,

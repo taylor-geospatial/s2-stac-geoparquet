@@ -44,6 +44,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { PMTiles, Protocol } from "pmtiles";
 import { canSampleUint16, cogTileLayer, destroyTileTextures, previewImage, previewLayer, openScene, sceneCog,
+  windowImage, bandWindowImage,
   loadOverviews, sceneIndexStats, bandPreviewImage, bandTileLayer,
   tciOverviewImage } from "./cog.js";
 import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSES, PRESETS,
@@ -51,6 +52,7 @@ import { BANDS, MASK_BANDS, bandInfo, bandTitle, fixedRange, INDICES, SCL_CLASSE
 import { dayRange, valueRange } from "./rangeslider.js";
 import { sceneRows, warmPart, readTable, keyedRows, fmtSecs } from "./search.js";
 import { SORTS, viewOf, indexOfId, clampIndex, filterKeyOf, whyFiltered } from "./results.js";
+import { viewKeyOf, viewChangedEnough, WarmBudget, rungFor, toneOf } from "./warm.js";
 // deck.gl, luma.gl and @developmentseed/deck.gl-geotiff are bundled into this
 // module by Vite, so there is one copy of each. The raster layers build
 // luma.gl textures and hand them to the shader pipeline this page's own Deck
@@ -2692,9 +2694,14 @@ function scrubPreviewFor(row) {
         const bitmap = await thumbBitmapFor(row);
         if (!bitmap) return null;
         const white = /\/thumbnail\.jpg$/i.test(new URL(row.thumbnail_url).pathname);
-        const img = previewImage(cog, bitmap, { white });
+        // A thumbnail whose aspect does not match the COG used to give no
+        // entry at all, so the scrub showed nothing on that date. The soft
+        // rung's job is to say the scrub moved, so take it loose instead.
+        const img = previewImage(cog, bitmap, { white })
+          ?? previewImage(cog, bitmap, { white, loose: true });
         if (img) scrubReady.add(id);
-        return img ? { img, cog, thumb: img, hd: false } : null;
+        return img ? { img, cog, scene, thumb: img, hd: false,
+          viewKey: null, specKey: null } : null;
       } catch {
         // A missing/odd thumbnail_url (sceneDirOf) or a failed header read
         // (sceneCog) resolves to null rather than rejecting, so an awaiter
@@ -2821,12 +2828,45 @@ async function prefetchScrubStack() {
 // almost nothing, because it keeps the ImageBitmap the results grid already
 // decoded instead of a warped copy of it.
 const SCRUB_HD_MAX = 20;
+// The warmed reads live in host memory, not on the GPU. A windowed read is
+// smaller than a whole-scene overview, but twenty of them still add up, so
+// the budget counts bytes and the oldest goes first.
+const WARM_BYTES = 192 * 1024 * 1024;
+const warmBudget = new WarmBudget(WARM_BYTES);
+// The view generation every sharp rung belongs to. A rung read for another
+// generation shows another place, so rungFor refuses it.
+let warmView = null;
+let warmViewKey = "";
+const viewStateNow = () => {
+  const mb = map.getBounds();
+  return { zoom: map.getZoom(),
+    bounds: [mb.getWest(), mb.getSouth(), mb.getEast(), mb.getNorth()] };
+};
+// Web mercator metres per pixel at the view centre. This is the scale the
+// windowed read picks its pyramid level against.
+const viewMetersPerPixel = () => {
+  const lat = (map.getCenter().lat * Math.PI) / 180;
+  return (156543.03392 * Math.cos(lat)) / 2 ** map.getZoom();
+};
+// Start a new generation when the view has moved far enough. Returns true
+// when it did, which is the caller's signal to retire the sharp rungs.
+function refreshWarmView(force = false) {
+  const next = viewStateNow();
+  if (!force && !viewChangedEnough(warmView, next)) return false;
+  warmView = next;
+  warmViewKey = viewKeyOf(next);
+  return true;
+}
+const liveSpecKey = () => bandSpec(shown).bands.join("+");
 // The entry whose `img` the current scrubLayer was built from, or null. Only
 // ever read together with `scrubLayer`, which every clear path nulls — so a
 // stale value here cannot make the upgrade below put a layer back on a map
 // that has moved on.
 let scrubShown = null;
 async function upgradeScrubStack(order, seq) {
+  // Fix the generation this whole pass reads for. Every rung it writes
+  // carries this key, and a later move retires them together.
+  if (!warmView) refreshWarmView(true);
   for (let n = 0; n < order.length && n < SCRUB_HD_MAX; n++) {
     if (seq !== prefetchSeq) return;
     // A committed scene owns the connection pool until it settles: these
@@ -2842,6 +2882,39 @@ async function upgradeScrubStack(order, seq) {
     }
     await upgradeScrubPreview(order[n], seq);
   }
+  if (seq !== prefetchSeq) return;
+  await fillScrubOverviews(order, seq);
+}
+
+// The idle rung. The windowed pass above is what the reader is waiting for,
+// so this runs only after it finishes. It reads the whole-scene overview
+// and promotes it over the thumbnail, which gives a better soft image on
+// the next zoom. It never displaces a sharp rung.
+async function fillScrubOverviews(order, seq) {
+  for (let n = 0; n < order.length && n < SCRUB_HD_MAX; n++) {
+    if (seq !== prefetchSeq) return;
+    const row = order[n];
+    const id = String(row.id);
+    const p = scrubPreviewFor(row);
+    const entry = await p.catch(() => null);
+    if (seq !== prefetchSeq) return;
+    if (!entry || entry.overview) continue;
+    let img = null;
+    try {
+      img = await tciOverviewImage(entry.cog);
+    } catch {
+      continue;
+    }
+    if (seq !== prefetchSeq) return;
+    if (!img || scrubPreviews.get(id) !== p) continue;
+    entry.overview = img;
+    // The soft rung only. A sharp rung for the live view outranks it.
+    if (!entry.hd) {
+      entry.img = img;
+      entry.thumb = img;
+      paintScrubTrack();
+    }
+  }
 }
 
 async function upgradeScrubPreview(row, seq) {
@@ -2849,23 +2922,38 @@ async function upgradeScrubPreview(row, seq) {
   if (scrubReadyHd.has(id)) return;
   const p = scrubPreviewFor(row);
   const entry = await p.catch(() => null);
-  if (seq !== prefetchSeq || !entry || entry.hd) return;
+  if (seq !== prefetchSeq || !entry) return;
+  // The keys are read before the await and compared again after it. A read
+  // that lands after a zoom or a preset change is a picture of another
+  // place, or of this place in the wrong colours, so it is dropped.
+  const viewKey = warmViewKey;
+  const specKey = liveSpecKey();
+  if (rungFor(entry, viewKey, specKey) === "sharp") return;
   let img = null;
   try {
-    img = await tciOverviewImage(entry.cog);
+    const spec = bandSpec(shown);
+    const mpp = viewMetersPerPixel();
+    img = specKey === "TCI"
+      ? await windowImage(entry.cog, warmView.bounds, mpp)
+      : await bandWindowImage(entry.scene, spec, warmView.bounds, mpp);
   } catch {
-    // A range read that fails leaves the thumbnail rung in place: the track
+    // A range read that fails leaves the soft rung in place: the track
     // keeps the subdued tone for this position and nothing retries it.
     return;
   }
   if (seq !== prefetchSeq || !img) return;
+  if (viewKey !== warmViewKey || specKey !== liveSpecKey()) return;
   // The entry may have been evicted (and perhaps rebuilt) under the read:
   // only the live promise's own entry may be swapped, or the HD set would
   // claim an id whose cache entry no longer exists.
   if (scrubPreviews.get(id) !== p) return;
   entry.img = img;
   entry.hd = true;
+  entry.viewKey = viewKey;
+  entry.specKey = specKey;
   scrubReadyHd.add(id);
+  warmBudget.add(id, img.byteLength);
+  for (const dropped of warmBudget.evictTo()) downgradeScrubHd(dropped);
   capScrubHd();
   paintScrubTrack();
   // If this scene's thumbnail rung is what the map is showing right now — a
@@ -2890,21 +2978,29 @@ async function upgradeScrubPreview(row, seq) {
 // again.
 function capScrubHd() {
   while (scrubReadyHd.size > SCRUB_HD_MAX) {
-    const oldest = scrubReadyHd.values().next().value;
-    scrubReadyHd.delete(oldest);
-    const p = scrubPreviews.get(oldest);
-    if (!p) continue;
-    // The cache holds promises, and this one settled long before its id could
-    // enter scrubReadyHd — so the entry arrives on the very next microtask,
-    // not after any I/O. The set membership is re-read there all the same: a
-    // fresh upgrade of this same id in between must win over the downgrade.
-    p.then((entry) => {
-      if (!entry || !entry.hd || scrubReadyHd.has(oldest)) return;
-      entry.img = entry.thumb;
-      entry.hd = false;
-      paintScrubTrack();
-    }).catch(() => null);
+    downgradeScrubHd(scrubReadyHd.values().next().value);
   }
+}
+
+// Put one id back on its soft rung. Both caps call this: the count cap
+// above and the byte budget in the upgrade.
+function downgradeScrubHd(id) {
+  scrubReadyHd.delete(id);
+  warmBudget.delete(id);
+  const p = scrubPreviews.get(id);
+  if (!p) return;
+  // The cache holds promises, and this one settled long before its id could
+  // enter scrubReadyHd — so the entry arrives on the very next microtask,
+  // not after any I/O. The set membership is re-read there all the same: a
+  // fresh upgrade of this same id in between must win over the downgrade.
+  p.then((entry) => {
+    if (!entry || !entry.hd || scrubReadyHd.has(id)) return;
+    entry.img = entry.thumb;
+    entry.hd = false;
+    entry.viewKey = null;
+    entry.specKey = null;
+    paintScrubTrack();
+  }).catch(() => null);
 }
 
 let scrubSeq = 0;

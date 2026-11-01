@@ -66,3 +66,21 @@ export class WarmBudget {
     return dropped;
   }
 }
+
+// Which rung an entry can serve for the given view and band set. A sharp
+// read belongs to one view generation and one band set. Outside those it is
+// a picture of somewhere else, or of the same place in the wrong colours,
+// so it falls back to soft rather than being shown.
+export function rungFor(entry, viewKey, specKey) {
+  if (!entry || !entry.hd) return "soft";
+  if (entry.viewKey !== viewKey || entry.specKey !== specKey) return "soft";
+  return "sharp";
+}
+
+// The scrub track's three states. 0 is nothing yet, 1 is a soft image, 2 is
+// sharp for this view. Tone 1 does not depend on the view, so a zoom leaves
+// it alone and clears only tone 2.
+export function toneOf(entry, viewKey, specKey) {
+  if (!entry) return 0;
+  return rungFor(entry, viewKey, specKey) === "sharp" ? 2 : 1;
+}
