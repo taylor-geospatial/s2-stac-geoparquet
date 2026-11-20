@@ -134,12 +134,13 @@ one part it names.
 
 The rows follow the [stac-geoparquet
 specification](https://github.com/radiantearth/stac-geoparquet-spec/blob/main/stac-geoparquet-spec.md)
-v1.1.0, released on 2026-08-11. One row is one STAC item. The item properties
-sit at the top level. `datetime` is a native Parquet timestamp in UTC.
+v1.1.0, released on 2026-08-11. One row is one STAC item. Each item property
+is a top-level column. `datetime` is a native Parquet timestamp in UTC.
 `geometry` is a native Parquet `GEOMETRY` column in OGC:CRS84, and `links` is
 a list of link structs.
 
-Three things differ from that specification. A reader has to know them.
+The table below gives what differs from that specification. A reader has to
+know each row.
 
 | What | Here | The specification |
 | --- | --- | --- |
