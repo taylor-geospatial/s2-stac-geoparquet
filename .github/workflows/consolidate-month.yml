@@ -272,7 +272,7 @@ jobs:
           python-version: "3.12"
       - name: Install tooling
         # geoparquet-io pinned on purpose: see ci.yml and gpio-fix-report.md.
-        run: pip install --quiet duckdb boto3 'geoparquet-io==1.5.0' 'rashid>=0.1.8,<0.2.0' stac-check
+        run: pip install --quiet duckdb boto3 'geoparquet-io==1.5.0' 'rashid>=0.4.0,<0.5.0' stac-check
       # One directory per artifact (no merge): two years share part names,
       # so the parts are placed by (year, part) in the step below.
       - name: Collect the consolidated parts

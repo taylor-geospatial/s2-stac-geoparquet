@@ -56,6 +56,7 @@
       "href": "./z01-20.parquet",
       "type": "application/vnd.apache.parquet",
       "title": "2019 scenes, UTM zones 1\u201320",
+      "description": "The archive of the year for UTM zones 1 to 20. The build splits a year into zone parts because a whole year of this collection does not fit the disk of the runner that sorts it. GeoParquet 2.0, with a native Parquet GEOMETRY column in OGC:CRS84 and one row per upstream Earth Search item.",
       "roles": [
         "data"
       ],
@@ -68,6 +69,7 @@
       "href": "./z21-35.parquet",
       "type": "application/vnd.apache.parquet",
       "title": "2019 scenes, UTM zones 21\u201335",
+      "description": "The archive of the year for UTM zones 21 to 35. The build splits a year into zone parts because a whole year of this collection does not fit the disk of the runner that sorts it. GeoParquet 2.0, with a native Parquet GEOMETRY column in OGC:CRS84 and one row per upstream Earth Search item.",
       "roles": [
         "data"
       ],
@@ -80,6 +82,7 @@
       "href": "./z36-46.parquet",
       "type": "application/vnd.apache.parquet",
       "title": "2019 scenes, UTM zones 36\u201346",
+      "description": "The archive of the year for UTM zones 36 to 46. The build splits a year into zone parts because a whole year of this collection does not fit the disk of the runner that sorts it. GeoParquet 2.0, with a native Parquet GEOMETRY column in OGC:CRS84 and one row per upstream Earth Search item.",
       "roles": [
         "data"
       ],
@@ -92,6 +95,7 @@
       "href": "./z47-60.parquet",
       "type": "application/vnd.apache.parquet",
       "title": "2019 scenes, UTM zones 47\u201360",
+      "description": "The archive of the year for UTM zones 47 to 60. The build splits a year into zone parts because a whole year of this collection does not fit the disk of the runner that sorts it. GeoParquet 2.0, with a native Parquet GEOMETRY column in OGC:CRS84 and one row per upstream Earth Search item.",
       "roles": [
         "data"
       ],

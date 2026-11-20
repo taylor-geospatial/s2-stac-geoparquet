@@ -70,6 +70,25 @@ S3 = "s3://us-west-2.opendata.source.coop/tge-labs/s2-stac-geoparquet"
 REPO = "https://github.com/taylor-geospatial/s2-stac-geoparquet"
 APP = "https://research.taylorgeospatial.org/s2-stac-geoparquet/"
 
+# The Portolan profile version this catalog declares (PORTO-CORE-006). It is a
+# constant, not a value the installed rashid or portolan-cli stamps, because
+# those track a dependency and this tracks a reviewed spec release. rashid
+# reads the version from the root catalog and reports every object that
+# declares a different one (PTL-CNF-002), so catalog/catalog.json and
+# catalog/stats*/collection.json carry the same string by hand.
+PORTOLAN_SCHEMA = "https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json"
+
+# One sentence for the thumbnail of every collection here, because every
+# thumbnail in this catalog is the same render. tools/make_thumbnail.py bins
+# the `bbox` centre of each row on a world grid and paints the count on a log
+# scale. The stats collections copy the text by hand, because their
+# collection.json is committed rather than generated.
+THUMBNAIL_DESCRIPTION = (
+    "A world grid painted with the number of scene centres in each cell, on a "
+    "log scale. tools/make_thumbnail.py bins the `bbox` column of the "
+    "published Parquet, so the image shows where the index holds items."
+)
+
 EARTH_SEARCH = "https://earth-search.aws.element84.com/v1"
 EARTH_SEARCH_PAGE = "https://element84.com/earth-search/"
 # One registry entry covers both: the sentinel-cogs bucket the first
@@ -279,6 +298,8 @@ def collection_assets(collection_dir: Path) -> dict:
             "href": "./thumbnail.png",
             "type": "image/png",
             "title": "Scene density, rendered from the published index",
+            # PORTO-CORE-088 makes a description a SHOULD on every asset.
+            "description": THUMBNAIL_DESCRIPTION,
             "roles": ["thumbnail"],
             "file:size": len(raw),
             # Multihash: '1220' is sha2-256 over 32 bytes, then the digest.
@@ -564,11 +585,16 @@ def main() -> int:
     collection = {
         "type": "Collection",
         "stac_version": "1.1.0",
+        # No web-map-links. That extension requires at least one link with a
+        # web-map rel (xyz, wms, wmts, tilejson, pmtiles, 3d-tiles), and an
+        # item index has none. The tiles live in the stats collection beside
+        # it. A declared extension is a claim about the object's own shape, so
+        # rashid reports this one as an error (PTL-EXT-001, Portolan core
+        # "Conformance and versioning", structural validation).
         "stac_extensions": [
-            "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json",
+            PORTOLAN_SCHEMA,
             "https://schemas.portolan-sdi.org/incubating/partition/v1.0.0/schema.json",
             "https://stac-extensions.github.io/table/v1.2.0/schema.json",
-            "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json",
             "https://stac-extensions.github.io/file/v2.1.0/schema.json",
         ],
         "id": config.id,

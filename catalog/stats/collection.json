@@ -2,7 +2,7 @@
   "type": "Collection",
   "stac_version": "1.1.0",
   "stac_extensions": [
-    "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json",
+    "https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json",
     "https://stac-extensions.github.io/table/v1.2.0/schema.json",
     "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json",
     "https://stac-extensions.github.io/file/v2.1.0/schema.json"
@@ -146,6 +146,7 @@
       "href": "./mgrs.pmtiles",
       "type": "application/vnd.pmtiles",
       "title": "MGRS tile footprints",
+      "description": "Vector tiles of the envelope of every MGRS tile in this table, in the `mgrs` layer. tools/s2_stats.py builds the envelopes from the item index and `gpio pmtiles create` writes the archive. A tile whose scene footprints wrap the antimeridian is left out of the tileset, and keeps its rows in the table.",
       "roles": [
         "visual"
       ],
@@ -157,6 +158,7 @@
       "href": "./styles/default.json",
       "type": "application/vnd.mapbox.style+json",
       "title": "Default MapLibre style",
+      "description": "The MapLibre style a browser loads by default. It fills the `mgrs` layer of `mgrs.pmtiles` with one colour and draws the outline of each tile. It paints no column, so it shows where tiles exist and not what they hold.",
       "roles": [
         "style",
         "default"
@@ -168,6 +170,7 @@
       "href": "./thumbnail.png",
       "type": "image/png",
       "title": "Scene density, rendered from the published index",
+      "description": "A world grid painted with the number of scene centres in each cell, on a log scale. tools/make_thumbnail.py bins the `bbox` column of the published Parquet, so the image shows where the index holds items.",
       "roles": [
         "thumbnail"
       ],

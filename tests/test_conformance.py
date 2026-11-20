@@ -33,19 +33,26 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from publish import load_config  # noqa: E402
 
-ACCEPTED: set[str] = set()
+#: Every id here has a row in docs/conformance.md and an issue that tracks its
+#: removal. PTL-AST-009 fires on stats and stats-c1, because the GeoParquet
+#: that mgrs.pmtiles is built from is deleted after the build rather than
+#: published (PORTO-FMT-062, issue #39).
+ACCEPTED: set[str] = {"PTL-AST-009"}
 
 config = load_config()
 target = ROOT / config["publish_dir"]
 
-# The floor comes from portolan-cli/pyproject.toml:54. Rules PTL-LNK-007,
-# PTL-LNK-008, PTL-LNK-009 and PTL-AST-006 do not exist below rashid 0.1.5.
-# This gate asserts all four. A rashid below the floor reports a pass for a
-# catalog that it never checked against those four rules. The upper bound stops
-# an unreviewed 0.2 rule set from changing what this gate means.
-MIN_VERSION = (0, 1, 5)
-MAX_VERSION = (0, 2, 0)
-SPEC = "rashid>=0.1.5,<0.2.0"
+# The floor is 0.4.0, the first rashid that bundles the Portolan v0.3.0
+# profile. This catalog declares v0.3.0 in catalog/catalog.json, and rashid
+# reads the profile version from the root. An older rashid does not carry the
+# v0.3.0 rules, so it reports a pass for a catalog it never checked against
+# them: PTL-AST-009 (PORTO-FMT-062) and PTL-AST-010 (PORTO-CORE-088) are both
+# new in that rule set. The upper bound stops an unreviewed 0.5 rule set from
+# changing what this gate means. Raise both bounds together, and read the new
+# rules first.
+MIN_VERSION = (0, 4, 0)
+MAX_VERSION = (0, 5, 0)
+SPEC = "rashid>=0.4.0,<0.5.0"
 INSTALL = f"python -m pip install '{SPEC}'"
 
 

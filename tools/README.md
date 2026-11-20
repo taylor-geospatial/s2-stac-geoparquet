@@ -30,6 +30,11 @@ Geospatial RAILS cluster, and GitHub only appends its daily tail.
 | Audit | `s2_audit.py` by hand | `audit_year.sbatch` |
 | Metadata | regenerated and published by each workflow | regenerated on a laptop, committed, `publish-catalog` |
 
+A metadata change that measures nothing has a third path. `make_items.py
+--descriptions-only` rewrites the asset `title` and `description` of every
+committed item from `parts_for()` and `part_descriptions()`, and reads no
+Parquet. Run it from a clean checkout after either function changes.
+
 ### GitHub technique (first collection; not used for Collection 1)
 
 Four workflows, in the order they ran once and the order two of them keep

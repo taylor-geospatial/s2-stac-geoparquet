@@ -314,7 +314,7 @@ jobs:
           python-version: "3.12"
       - run: |
           pip install --quiet duckdb boto3 'geoparquet-io==1.5.0' \
-            'rashid>=0.1.8,<0.2.0' stac-check
+            'rashid>=0.4.0,<0.5.0' stac-check
 
       # make_items.py/make_collection.py only consider a year "staged" (and
       # so worth --remote-baseline probing) when its year=YYYY directory

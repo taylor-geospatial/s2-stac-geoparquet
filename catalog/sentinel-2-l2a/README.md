@@ -130,6 +130,30 @@ range, footprint bounds and platforms, so a client can choose a year without
 opening a byte of Parquet. Each data asset in the item states the same for the
 one part it names.
 
+## STAC-GeoParquet conformance
+
+The rows follow the [stac-geoparquet
+specification](https://github.com/radiantearth/stac-geoparquet-spec/blob/main/stac-geoparquet-spec.md)
+v1.1.0, released on 2026-08-11. One row is one STAC item. Each item property
+is a top-level column. `datetime` is a native Parquet timestamp in UTC.
+`geometry` is a native Parquet `GEOMETRY` column in OGC:CRS84, and `links` is
+a list of link structs.
+
+The table below gives what differs from that specification. A reader has to
+know each row.
+
+| What | Here | The specification |
+| --- | --- | --- |
+| `bbox` | `list<double>` of 4 values, `[w, s, e, n]` | a struct of floats that meets the GeoParquet 1.1 bounding-box-column rule |
+| `assets` | a compact JSON string | a struct of asset structs |
+| Parquet file metadata | no `stac-geoparquet` key | a `stac-geoparquet` key that holds `version` and `collections` |
+
+The `assets` string is a deliberate choice, and the [agent guide](AGENTS.md)
+gives the reason. The other two need a rewrite of every published file, so
+[issue #40](https://github.com/taylor-geospatial/s2-stac-geoparquet/issues/40)
+tracks them. The table also keeps the `type` column, which the specification
+calls optional and does not recommend.
+
 ## Coverage
 
 The record starts in November 2016, when Earth Search produced its first L2A
