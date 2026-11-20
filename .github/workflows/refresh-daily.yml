@@ -125,7 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           pip install --quiet duckdb boto3 'geoparquet-io==1.5.0' \
-            'rashid>=0.1.8,<0.2.0' stac-check
+            'rashid>=0.4.0,<0.5.0' stac-check
       - name: Fetch the lookback window
         if: steps.guard.outputs.published == 'true'
         run: |
@@ -386,7 +386,7 @@ jobs:
         run: |
           set -euo pipefail
           pip install --quiet duckdb boto3 'geoparquet-io==1.5.0' \
-            'rashid>=0.1.8,<0.2.0' stac-check
+            'rashid>=0.4.0,<0.5.0' stac-check
       # --field created: the window is on the API's `created` property, so
       # a scene ESA reprocessed this week is fetched whatever its
       # acquisition date (tools/s2_fetch.py says how the query is formed).

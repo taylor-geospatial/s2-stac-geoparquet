@@ -2,10 +2,9 @@
   "type": "Collection",
   "stac_version": "1.1.0",
   "stac_extensions": [
-    "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json",
+    "https://schemas.portolan-sdi.org/portolan/v0.3.0/schema.json",
     "https://schemas.portolan-sdi.org/incubating/partition/v1.0.0/schema.json",
     "https://stac-extensions.github.io/table/v1.2.0/schema.json",
-    "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json",
     "https://stac-extensions.github.io/file/v2.1.0/schema.json"
   ],
   "id": "sentinel-2-c1-l2a",
@@ -525,7 +524,7 @@
     },
     "swir22": {
       "type": "image/tiff; application=geotiff; profile=cloud-optimized",
-      "title": "SWIR 2.2μm - 20m",
+      "title": "SWIR 2.2\u03bcm - 20m",
       "eo:bands": [
         {
           "name": "B12",
@@ -629,7 +628,7 @@
     },
     "swir16": {
       "type": "image/tiff; application=geotiff; profile=cloud-optimized",
-      "title": "SWIR 1.6μm - 20m",
+      "title": "SWIR 1.6\u03bcm - 20m",
       "eo:bands": [
         {
           "name": "B11",
@@ -870,6 +869,7 @@
       "href": "./thumbnail.png",
       "type": "image/png",
       "title": "Scene density, rendered from the published index",
+      "description": "A world grid painted with the number of scene centres in each cell, on a log scale. tools/make_thumbnail.py bins the `bbox` column of the published Parquet, so the image shows where the index holds items.",
       "roles": [
         "thumbnail"
       ],

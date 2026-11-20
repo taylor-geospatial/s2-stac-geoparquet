@@ -614,3 +614,67 @@ def test_c1_collection_json_comes_from_the_config():
     assert "visual-jp2" not in assets
     assert assets["thumbnail"]["type"] == "image/jpeg"
     assert not any(k.startswith("proj:") for a in assets.values() for k in a)
+
+
+# ---------------------------------------------------------------------------
+# Asset descriptions. PORTO-CORE-088 makes a description a SHOULD on every
+# asset, and the generator owns the text. These two tests stop the committed
+# items from drifting away from it, in either direction.
+# ---------------------------------------------------------------------------
+from make_items import part_descriptions, restamp_descriptions  # noqa: E402
+
+
+def test_every_part_has_a_description():
+    """part_descriptions covers exactly the keys parts_for advertises, for
+    both collections, so build_item never looks up a missing key."""
+    for config in (FIRST, C1):
+        texts = part_descriptions(config)
+        assert set(texts) == {key for key, _, _, _ in parts_for(config)}
+        assert all(text.strip() for text in texts.values())
+
+
+def test_committed_items_carry_the_generated_descriptions():
+    """Every committed item states the title and the description the
+    generator writes.
+
+    A full make_items.py run measures the Parquet, so it cannot run in CI.
+    `--descriptions-only` writes these two fields and reads no data. This
+    test is what makes a hand-edit of either field a failure here instead of
+    a surprise at the next refresh, which would overwrite it.
+    """
+    for config in (FIRST, C1):
+        texts = part_descriptions(config)
+        titles = {key: title for key, _, title, _ in parts_for(config)}
+        directory = ROOT / "catalog" / config.catalog_dir
+        items = sorted(directory.glob("year=*/[0-9]*.json"))
+        assert items, f"no committed items under {directory}"
+        for path in items:
+            item = json.loads(path.read_text())
+            year = path.stem
+            for key, asset in item["assets"].items():
+                assert key in texts, f"{path}: {key} is not a known part"
+                assert asset["title"] == titles[key].format(year=year), path
+                assert asset["description"] == texts[key], path
+
+
+def test_restamp_descriptions_is_idempotent(tmp_path):
+    """A second --descriptions-only run over the same tree changes nothing."""
+    year_dir = tmp_path / "year=2026"
+    year_dir.mkdir()
+    item = {"type": "Feature", "id": "2026", "assets": {"data": {
+        "href": "./items.parquet", "type": "application/vnd.apache.parquet",
+        "title": "stale", "roles": ["data"], "table:row_count": 7}}}
+    (year_dir / "2026.json").write_text(json.dumps(item, indent=2) + "\n")
+
+    restamp_descriptions(tmp_path, C1)
+    first = (year_dir / "2026.json").read_text()
+    restamp_descriptions(tmp_path, C1)
+    assert (year_dir / "2026.json").read_text() == first
+
+    written = json.loads(first)["assets"]["data"]
+    assert written["title"] == "2026 scenes, GeoParquet 2.0"
+    assert written["description"] == part_descriptions(C1)["data"]
+    # The description lands between the title and the roles, which is where
+    # build_item puts it, so a later full run writes the same bytes.
+    assert list(written) == ["href", "type", "title", "description", "roles",
+                             "table:row_count"]

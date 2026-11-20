@@ -261,6 +261,13 @@ count and temporal extent from the published parts on every refresh, and
 `timeline.parquet`. The published `collection.json` is the authority on what is
 here now, and a committed one can lag it.
 
+A full `tools/make_items.py` run measures the Parquet, so it needs the staged
+or the published data. `tools/make_items.py --descriptions-only` writes the
+asset `title` and `description` of every committed item and reads no data.
+Use it when the wording changes but the data does not.
+`tests/test_make_items.py` asserts that a full run writes the same two
+strings, so the two cannot drift apart.
+
 ## The repository
 
 Catalog metadata is versioned alongside the code, where CI validates each

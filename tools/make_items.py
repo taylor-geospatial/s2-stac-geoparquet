@@ -15,8 +15,8 @@ dictionary-encoded column and states what the file actually holds rather than
 what the calendar implies (Sentinel-2C only starts appearing part-way through
 2025, and no schedule can tell you where).
 
-Two modes, because the scheduled workflows and a full rebuild need different
-things:
+Three modes, because the scheduled workflows, a full rebuild, and a metadata
+change need different things:
 
     python3 tools/make_items.py --data-dir ./staging/publish/sentinel-2-l2a
         Describe exactly what is staged. Years with no directory under
@@ -34,6 +34,12 @@ things:
         -- means the question went unanswered, and the run falls back to what
         the committed item recorded for that part rather than writing a
         smaller year. See discover() for the three cases.
+
+    python3 tools/make_items.py --descriptions-only
+        Rewrite the asset `title` and `description` of every committed item
+        from parts_for() and part_descriptions(), and read no Parquet. Use
+        this when the wording changes but the data does not. A full run writes
+        the same two strings, and tests/test_make_items.py asserts it.
 
 A year takes one of three shapes (spec Amendment 3), and all are discovered
 from the same candidate list: 2015-2018 are one `items.parquet`; 2019-2020
@@ -147,6 +153,52 @@ def parts_for(config: CollectionConfig = DEFAULT_CONFIG,
 
 
 PARTS = parts_for()
+
+
+# PORTO-CORE-088 makes a description a SHOULD on every asset, and rashid
+# reports a missing one as PTL-AST-010. The title names the part. The
+# description says what the part holds, how it is encoded, and when it
+# changes, which is what a reader needs before a query. It is keyed on the
+# asset key rather than carried in parts_for(), so the shape of that tuple
+# stays the one every caller and test already reads.
+def part_descriptions(config: CollectionConfig = DEFAULT_CONFIG,
+                      ) -> dict[str, str]:
+    """One description per asset key of parts_for(config)."""
+    merge = "consolidation" if config.zone_split else "fold"
+    encoding = ("GeoParquet 2.0, with a native Parquet GEOMETRY column in "
+                "OGC:CRS84 and one row per upstream Earth Search item.")
+    out = {
+        "data": (f"The archive of the year: every scene the last {merge} "
+                 f"merged into one file. {encoding}"),
+    }
+    zones = (*ZONE_PARTS, *ZONE_PARTS_8) if config.zone_split else ()
+    for label, lo, hi in zones:
+        out[f"data-{label}"] = (
+            f"The archive of the year for UTM zones {lo} to {hi}. The build "
+            f"splits a year into zone parts because a whole year of this "
+            f"collection does not fit the disk of the runner that sorts it. "
+            f"{encoding}")
+    for stem in live_part_names(config):
+        if stem == "live" and config.monthly_live:
+            out[stem] = (
+                f"The tail this collection published before the monthly live "
+                f"parts. The first refresh that wrote those parts emptied it, "
+                f"and it stays in the bucket with zero rows. {encoding}")
+        elif stem == "live":
+            out[stem] = (
+                f"The rolling tail: the scenes the daily refresh fetched "
+                f"since the last {merge}. The {merge} merges this file into "
+                f"the archive of the year and leaves it with zero rows. "
+                f"{encoding}")
+        else:
+            month = MONTH_NAMES[int(stem.split("-")[1]) - 1]
+            out[stem] = (
+                f"The rolling tail for {month}: the scenes the daily refresh "
+                f"fetched for that month since the last {merge}. The {merge} "
+                f"merges this file into the archive of the year and leaves it "
+                f"with zero rows. {encoding}")
+    return out
+
 
 # Rounding a bbox has to widen it. round() can shrink a bound by up to half a
 # unit in the last place, which turns a footprint that touches the antimeridian
@@ -408,11 +460,13 @@ def build_item(con: duckdb.DuckDBPyConnection, year: int, parts: list[dict],
     # item's properties are the year's totals and cannot be split back up, so
     # without this a part that cannot be read has nothing to fall back to.
     assets = {}
+    texts = part_descriptions(config)
     for part, st in zip(parts, stats):
         assets[part["key"]] = {
             "href": f"./{part['name']}",
             "type": "application/vnd.apache.parquet",
             "title": part["title"].format(year=year),
+            "description": texts[part["key"]],
             "roles": part["roles"],
             # A part with no rows has no time range, and the pair is left
             # out rather than written as null: null is not a string, and
@@ -469,12 +523,62 @@ def build_item(con: duckdb.DuckDBPyConnection, year: int, parts: list[dict],
     }
 
 
+def restamp_descriptions(out: Path, config: CollectionConfig) -> int:
+    """Write the generator's asset title and description into every committed
+    item, and measure nothing.
+
+    The full run needs the staged or published Parquet, because every other
+    field of an item is measured from it. A title and a description are not
+    measured. They are a function of the asset key alone, so this pass brings
+    the committed items up to date with parts_for() and part_descriptions()
+    offline, and a later full run writes the same two strings.
+
+    tests/test_make_items.py asserts that, so a drift between the two is a
+    test failure rather than a surprise at the next refresh.
+    """
+    texts = part_descriptions(config)
+    titles = {key: title for key, _, title, _ in parts_for(config)}
+    changed = 0
+    for path in sorted(out.glob("year=*/[0-9]*.json")):
+        item = read_item(path)
+        if item is None:
+            continue
+        year = path.stem
+        assets = {}
+        for key, asset in (item.get("assets") or {}).items():
+            if key not in texts:
+                raise SystemExit(
+                    f"{path}: asset {key!r} is not a part of "
+                    f"{config.id}; parts_for() does not describe it")
+            # A description already present is dropped here and written
+            # again under the title, which is where build_item puts it. Copy
+            # it instead and the old text wins over the new one.
+            fixed = {}
+            for field, value in asset.items():
+                if field == "description":
+                    continue
+                fixed[field] = value
+                if field == "title":
+                    fixed["title"] = titles[key].format(year=year)
+                    fixed["description"] = texts[key]
+            assets[key] = fixed
+        if assets == (item.get("assets") or {}):
+            continue
+        item["assets"] = assets
+        path.write_text(json.dumps(item, indent=2) + "\n")
+        changed += 1
+        print(f"  {year}: {len(assets)} asset description(s) restamped")
+    print(f"\n  {changed} item(s) restamped under {out}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     dirs = ", ".join(cols.get(n).catalog_dir for n in cols.NAMES)
     cols.add_collection_arg(ap)
-    ap.add_argument("--data-dir", required=True,
-                    help="staged collection directory holding year=*/")
+    ap.add_argument("--data-dir",
+                    help="staged collection directory holding year=*/ "
+                         "(not needed with --descriptions-only)")
     ap.add_argument("--out",
                     help="tracked collection directory (default "
                          f"catalog/<catalog_dir>: {dirs})")
@@ -482,12 +586,20 @@ def main() -> int:
                     help="for a staged year, read parts missing from --data-dir "
                          "from the published catalog over HTTP")
     ap.add_argument("--years", help="comma list; default = every staged year")
+    ap.add_argument("--descriptions-only", action="store_true",
+                    help="rewrite only the asset title and description of "
+                         "every committed item, and read no Parquet")
     a = ap.parse_args()
     config = cols.get(a.collection)
 
-    data = Path(a.data_dir).resolve()
     out = (Path(a.out).resolve() if a.out
            else ROOT / "catalog" / config.catalog_dir)
+    if a.descriptions_only:
+        return restamp_descriptions(out, config)
+
+    if not a.data_dir:
+        raise SystemExit("--data-dir is required without --descriptions-only")
+    data = Path(a.data_dir).resolve()
     if not data.is_dir():
         raise SystemExit(f"--data-dir does not exist: {data}")
 

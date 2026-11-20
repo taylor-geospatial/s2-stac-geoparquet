@@ -146,6 +146,29 @@ range, footprint bounds and platforms, so a client can choose a year without
 opening a byte of Parquet. Each data asset in the item states the same for the
 one file it references.
 
+## STAC-GeoParquet conformance
+
+The rows follow the [stac-geoparquet
+specification](https://github.com/radiantearth/stac-geoparquet-spec/blob/main/stac-geoparquet-spec.md)
+v1.1.0, released on 2026-08-11. One row is one STAC item. The item properties
+sit at the top level. `datetime` is a native Parquet timestamp in UTC.
+`geometry` is a native Parquet `GEOMETRY` column in OGC:CRS84, and `links` is
+a list of link structs.
+
+Three things differ from that specification. A reader has to know them.
+
+| What | Here | The specification |
+| --- | --- | --- |
+| `bbox` | `list<double>` of 4 values, `[w, s, e, n]` | a struct of floats that meets the GeoParquet 1.1 bounding-box-column rule |
+| `assets` | a compact JSON string | a struct of asset structs |
+| Parquet file metadata | no `stac-geoparquet` key | a `stac-geoparquet` key that holds `version` and `collections` |
+
+The `assets` string is a deliberate choice, and the [agent guide](AGENTS.md)
+gives the reason. The other two need a rewrite of every published file, so
+[issue #40](https://github.com/taylor-geospatial/s2-stac-geoparquet/issues/40)
+tracks them. The table also keeps the `type` column, which the specification
+calls optional and does not recommend.
+
 ## Coverage
 
 Earth Search's `sentinel-2-c1-l2a` held 30,391,138 items when it was counted on
