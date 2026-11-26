@@ -54,20 +54,6 @@ something.
 
 | Rule | Where | Why accepted | Tracking |
 |---|---|---|---|
-| PTL-AST-009 | `stats`, `stats-c1` | The GeoParquet behind `mgrs.pmtiles` is a build intermediate that `tools/s2_stats.py` deletes, so neither collection references it. The fix uploads a data file, which no metadata change can do. | [#39](https://github.com/taylor-geospatial/s2-stac-geoparquet/issues/39) |
-
-### PTL-AST-009: the PMTiles has no GeoParquet beside it
-
-PORTO-FMT-062, new in v0.3.0, says a PMTiles asset must carry the `visual`
-role and must belong to a collection that references its source GeoParquet.
-Both stats collections carry the role. Neither references a GeoParquet file:
-`mgrs-monthly.parquet` and `timeline.parquet` are plain Parquet with no
-geometry column and no `geo` key, which a footer read over HTTP confirms.
-
-`tools/s2_stats.py` writes the tile envelopes as `mgrs-tiles.parquet`, feeds
-the file to `gpio pmtiles create`, and then deletes it. The tool already takes
-`--keep-footprint-table`. Issue #39 holds the four steps that close this, and
-the last two remove the row above and the id from `ACCEPTED`.
 
 <!--
 When you accept one, add a row and a section explaining it, like the row

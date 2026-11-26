@@ -34,10 +34,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 from publish import load_config  # noqa: E402
 
 #: Every id here has a row in docs/conformance.md and an issue that tracks its
-#: removal. PTL-AST-009 fires on stats and stats-c1, because the GeoParquet
-#: that mgrs.pmtiles is built from is deleted after the build rather than
-#: published (PORTO-FMT-062, issue #39).
-ACCEPTED: set[str] = {"PTL-AST-009"}
+#: removal. The set is empty: the catalog meets every rule the gate runs.
+ACCEPTED: set[str] = set()
 
 config = load_config()
 target = ROOT / config["publish_dir"]

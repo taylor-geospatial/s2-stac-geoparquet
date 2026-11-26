@@ -83,11 +83,9 @@ jobs:
           - collection: sentinel-2-l2a
             stats_dir: stats
             live_years: current
-            artifact: mgrs-tiles
           - collection: sentinel-2-c1-l2a
             stats_dir: stats-c1
             live_years: all
-            artifact: mgrs-tiles-c1
     env:
       COLLECTION: ${{ matrix.collection }}
       STATS_DIR: ${{ matrix.stats_dir }}
@@ -213,17 +211,9 @@ jobs:
             --out "./staging/publish/$STATS_DIR" --footprints \
             --keep-footprint-table
 
-      # mgrs-tiles.parquet (the ~33k-polygon tile-envelope table behind
-      # mgrs.pmtiles) is kept so the tileset can be rebuilt and A/B-tested
-      # locally without rescanning every published year part, but it must
-      # never reach the bucket: upload_data.py uploads every .parquet under
-      # --data-dir (./staging/publish), with no exception for intermediates.
-      # Move it out of that tree before the upload step runs.
-      - name: Move the footprint table out of the publish dir
-        if: steps.guard.outputs.published == 'true'
-        run: |
-          set -euo pipefail
-          mv "./staging/publish/$STATS_DIR/mgrs-tiles.parquet" ./staging/
+      # mgrs-tiles.parquet is the GeoParquet behind mgrs.pmtiles. It stays
+      # in the publish dir, so upload_data.py publishes it. Each stats
+      # collection.json references it as a data asset (PORTO-FMT-062).
 
       # This collection's stats collection from the timeline just written;
       # then every other collection tools/publish.py below would touch,
@@ -312,15 +302,3 @@ jobs:
       - name: Publish catalog metadata
         if: steps.guard.outputs.published == 'true'
         run: python3 tools/publish.py --confirm
-
-      # Uploaded as a workflow artifact (not to the bucket) so the tileset
-      # can be independently rebuilt and compared locally -- tippecanoe vs
-      # tylertoo A/B -- without rescanning 20+ GB of published parts.
-      - name: Upload the MGRS tile-envelope table as a workflow artifact
-        if: steps.guard.outputs.published == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ./staging/mgrs-tiles.parquet
-          retention-days: 14
-          if-no-files-found: error
