@@ -143,6 +143,30 @@
         "data"
       ]
     },
+    "tiles": {
+      "href": "./mgrs-tiles.parquet",
+      "type": "application/vnd.apache.parquet",
+      "title": "MGRS tile footprints (GeoParquet)",
+      "description": "The GeoParquet that mgrs.pmtiles is built from. One row per MGRS tile, with mgrs_tile and a geometry column that holds the envelope of every scene footprint in the tile. A tile whose scene footprints wrap the antimeridian is left out of this table, as it is left out of the tileset.",
+      "roles": [
+        "data"
+      ],
+      "file:size": 1095025,
+      "file:checksum": "122040cedec3850546208af87016c7f51628e8fbc5992db908634b709c27b4cf034e",
+      "table:primary_geometry": "geometry",
+      "table:columns": [
+        {
+          "name": "mgrs_tile",
+          "type": "string",
+          "description": "MGRS tile id, such as 53HNV. Join key against the mgrs.pmtiles feature id."
+        },
+        {
+          "name": "geometry",
+          "type": "geometry",
+          "description": "Envelope of every scene footprint in the tile, CRS84."
+        }
+      ]
+    },
     "pmtiles": {
       "href": "./mgrs.pmtiles",
       "type": "application/vnd.pmtiles",
